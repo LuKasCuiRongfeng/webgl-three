@@ -123,37 +123,9 @@ export async function initMap() {
 
     registerCanvasEvent(manager.getRenderer().domElement);
 
-    // test sphere
-    {
-        const geo = new SphereGeometry(1000, 256, 256)
-        const count = geo.getAttribute("position").count
-        const elevations: number[] = []
+    await preprocessTiles();
 
-        let elevation = 0
-
-        for (let i = 0; i < count; i++) {
-            if (i % 3 === 0) {
-                elevation = Math.random() * 20.0
-            }
-            elevations.push(elevation)
-        }
-        geo.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1))
-
-        const mat = new CustomShaderMaterial({
-            baseMaterial: MeshPhongMaterial,
-            color: 0xff0000,
-            vertexShader: vertex,
-            fragmentShader: fragment,
-            // wireframe: true
-        })
-
-        const mesh = new Mesh(geo, mat)
-        manager.scene.add(mesh)
-    }
-
-    // await preprocessTiles();
-
-    // await drawLayer();
+    await drawLayer();
 
     mapInitStatus.loadPercent = 100;
 }
@@ -267,11 +239,18 @@ async function preprocessTiles() {
     }
 }
 
+/** instance 处理地块 */
+async function preprocessInstanceTiles() {
+    const { tilesCount } = meshBytesUtils.getHeader();
+
+    let firsttile5
+}
+
 async function drawLayer() {
     const { tilesCount, radius } = meshBytesUtils.getHeader();
     const tileGeoArr: BufferGeometry[] = [];
 
-    for (let index = 0; index < tilesCount; index++) {
+    for (let index = 0; index < tilesCount - 1000000; index++) {
         const { corners, x, y, z } = meshBytesUtils.getTileByIndex(index);
         const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(index);
         const isLand = elevation > waterElevation;
@@ -316,6 +295,7 @@ async function drawLayer() {
         vertexColors: true,
         // 用于图层
         transparent: true,
+        wireframe: true,
         vertexShader: /* glsl */`
             attribute float elevation;
 
@@ -369,6 +349,33 @@ export function createTileGeometry(op: {
 
     const { vertices, color, elevation } = op;
 
+    const count = vertices.length
+    const center: number[] = []
+
+    let ax = 0, ay = 0, az = 0
+    for (let i = 0; i < count; i++) {
+        ax += vertices[i].x
+        ay += vertices[i].y
+        az += vertices[i].z
+    }
+
+    ax /= count;
+    ay /= count
+    az /= count
+
+    // 增加顶点数量，增加细分
+    for (let i = 0; i < count; i++) {
+        const p = vertices[i]
+        vertices.push({
+            x: (p.x + ax) / 2,
+            y: (p.y + ay) / 2,
+            z: (p.z + az) / 2,
+        })
+    }
+
+    // 加上中心
+    vertices.push({ x: ax, y: ay, z: az })
+
     vertices.forEach((v) => {
         const { x, y, z } = v;
         points.push(x, y, z);
@@ -388,16 +395,53 @@ export function createTileGeometry(op: {
     geo.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1));
 
     // geo.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
-    if (vertices.length === 6) {
+    if (count === 6) {
         // 六边形顶点索引，注意在自动计算法向量时，采用的右手定则
         // 三角面的顶点索引顺序使用右手定则，大拇指方向为方向为法向量方向
         // 麻痹的 unity 使用左手坐标系，反起转，操
         // geo.setIndex([0, 2, 1, 0, 3, 2, 0, 4, 3, 0, 5, 4]); // 右手
-        geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]); // 左手
+        // geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]); // 左手
+        geo.setIndex([
+            0, 1, 7,
+            0, 7, 6,
+            1, 2, 8,
+            1, 8, 7,
+            2, 3, 9,
+            2, 9, 8,
+            3, 4, 10,
+            3, 10, 9,
+            4, 11, 10,
+            4, 5, 11,
+            5, 6, 11,
+            5, 0, 6,
+            6, 7, 12,
+            7, 8, 12,
+            8, 9, 12,
+            9, 10, 12,
+            10, 11, 12,
+            11, 6, 12
+        ])
     } else {
         // 五边形顶点索引
         // geo.setIndex([0, 2, 1, 0, 3, 2, 0, 4, 3]); // 右手
-        geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]); // 左手
+        // geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]); // 左手
+        geo.setIndex([
+            0, 1, 6,
+            0, 6, 5,
+            1, 2, 7,
+            1, 7, 6,
+            2, 3, 8,
+            2, 8, 7,
+            3, 4, 9,
+            3, 9, 8,
+            4, 5, 9,
+            4, 0, 5,
+            5, 6, 10,
+            6, 7, 10,
+            7, 8, 10,
+            8, 9, 10,
+            9, 5, 10
+        ])
     }
 
     geo.computeVertexNormals();

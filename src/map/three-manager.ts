@@ -78,7 +78,7 @@ import {
     LineDashedMaterial,
     MeshLambertMaterial,
     MeshStandardMaterial,
-    MeshPhysicalMaterial
+    MeshPhysicalMaterial,
 } from "three";
 
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
