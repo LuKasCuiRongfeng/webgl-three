@@ -1,5 +1,4 @@
-
-import { LatLng, MapInitStatus, XColor } from "./types";
+import { GISZone, LatLng, MapInitStatus, XColor } from "./types";
 
 // --------------------------------------------------------
 // --------------------------------------------------------
@@ -268,6 +267,8 @@ export const LAT_DIVIDER = [0, 10, 30, 50, 70, 80, 90];
 /** 注意这个值 和 LAT_DIVIDER 对应起来  */
 export const LAT_SLICES = 12;
 
+/** 初始位置 */
+export const INIT_GISZONE: GISZone = [7, 1];
 
 export const INIT_LAT_LNG: LatLng = { lat: 49, lng: 2.5 };
 
@@ -797,6 +798,5 @@ export const WATER_ELEVATION: Map<number, XColor> = new Map([
     [-8, [0, 0, 128 / 255, 1]],
     [-9, [0, 0, 128 / 255, 1]],
 ]);
-
 
 export const SpriteOutlineThickness = 0.02;

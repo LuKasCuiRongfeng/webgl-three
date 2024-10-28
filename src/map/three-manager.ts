@@ -688,5 +688,5 @@ export {
     MeshLambertMaterial,
     MeshStandardMaterial,
     MeshPhysicalMaterial,
-    CustomShaderMaterial
+    CustomShaderMaterial,
 };

@@ -6,6 +6,7 @@ import ThreeManager, {
     BufferGeometryUtils,
     CustomShaderMaterial,
     DirectionalLight,
+    LineSegments,
     Mesh,
     MeshBasicMaterial,
     MeshPhongMaterial,
@@ -23,15 +24,26 @@ import {
     CAMEARA_TO_EARTH_MAX_DIS,
     CAMEARA_TO_EARTH_MIN_DIS,
     EARTH_COLOR,
+    EDIT_ZOOM,
     HEIGHT_SEGMENTS,
+    INIT_GISZONE,
+    INIT_LAT_LNG,
+    INIT_ZOOM,
+    LAT_DIVIDER,
+    LAT_SLICES,
+    LNG_DIVIDER,
+    LNG_SLICES,
     TILE_LAND_ALPHA_COLOR,
     TILE_LAND_COLOR,
     WIDTH_SEGMENTS,
+    ZONE_KEY_POLAR_N,
+    ZONE_KEY_POLAR_S,
 } from "./consts";
-import { Coordinate, MapInitStatus, XColor } from "./types";
+import { Coordinate, GISZone, GISZoneMap, GISZoneTileIndicesMap, MapInitStatus, XColor } from "./types";
 
 import fragment from "./frag.glsl";
 import vertex from "./vert.glsl";
+import { isEqual } from "lodash-es";
 
 /** 操作地图数据的对象 */
 let mapBytesUtils: MapBytesUtils = null;
@@ -68,6 +80,27 @@ let earthRadius: number = undefined;
 /** 大地球 */
 let earth: Mesh = null;
 
+/**
+ * 分区内的所有格子索引 zonekey -> [0, 1, 2, 3, 4, ...]
+ * 保存该该格子在全部格子下的索引
+ * 数据初始化后不再改变
+ */
+const zoneTileIndicesMap: GISZoneTileIndicesMap = new Map();
+
+/** 当前分区 tileindex -> vertex[] */
+const curTileVertexIndexMap: Map<number, number[]> = new Map();
+
+/** 当前分区 faceIndex -> tileIndex */
+const curfaceTileIndexMap: Map<number, number> = new Map();
+
+/** 当前分区所有的格子，由于这个值用的非常频繁，保存下来 */
+let curTileIndices: number[] = null;
+
+let curTileLayer: Mesh = null;
+
+/** 分区格子边界 */
+let curTileEdge: LineSegments = null;
+
 /** 所有 tileindex -> vertex[] */
 const TileVertexIndexMap: Map<number, number[]> = new Map();
 
@@ -77,6 +110,15 @@ const faceTileIndexMap: Map<number, number> = new Map();
 /** 地图初始化状态 */
 const mapInitStatus: MapInitStatus = { loadPercent: 0 };
 
+/** 自定义当前的缩放层级 */
+let zoom = INIT_ZOOM;
+
+/**
+ * 当前分区坐标，可以同时显示多个zone
+ * 如果是南北分区就取第一个放进去
+ */
+let gisZones: GISZoneMap = {};
+
 export async function initMap() {
     if (haveInitialed) {
         // 已经初始化了
@@ -84,7 +126,6 @@ export async function initMap() {
     }
 
     haveInitialed = true;
-
 
     if (!meshBytesUtils) {
         // @ts-ignore
@@ -126,6 +167,8 @@ export async function initMap() {
     await preprocessTiles();
 
     await drawLayer();
+
+    await drawVirtualZone();
 
     mapInitStatus.loadPercent = 100;
 }
@@ -181,7 +224,7 @@ function createEarth() {
 
 function crateLight() {
     const light = new DirectionalLight(0xffffff, 1);
-    const ambiet = new AmbientLight(0xffffff, 1)
+    const ambiet = new AmbientLight(0xffffff, 1);
     light.position.copy(manager.camera.position);
 
     manager.scene.add(light, ambiet);
@@ -198,16 +241,20 @@ async function preprocessTiles() {
     let accumFaceIndex = -1;
     let accumVertexIndex = -1;
 
-    // const { minimapFaceTileMap, minimapTileVertexMap } = getMinimapDrawMap();
-    // let minimapAccumFaceIndex = -1;
-    // let minimapAccumVertexIndex = -1;
-
     // 预分区，包括网格和地图数据
     for (let i = 0; i < tilesCount; i++) {
         const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
+        const zone = getZoneByPoint(new Vector3(x, y, -z));
+        if (!zone) continue;
 
-        // 预分区省id > 0和海洋 id < 0
-        const pId = provBytesUtils.getProvByIndex(i)?.province;
+        const key = getZoneKey(zone, true);
+        const tiles = zoneTileIndicesMap.get(key);
+
+        if (!tiles) {
+            zoneTileIndicesMap.set(key, [i]);
+        } else {
+            tiles.push(i);
+        }
 
         // 单个个多边形具有的三角面
         const corLen = corners.length;
@@ -243,14 +290,14 @@ async function preprocessTiles() {
 async function preprocessInstanceTiles() {
     const { tilesCount } = meshBytesUtils.getHeader();
 
-    let firsttile5
+    let firsttile5;
 }
 
 async function drawLayer() {
     const { tilesCount, radius } = meshBytesUtils.getHeader();
-    const tileGeoArr: BufferGeometry[] = [];
+    const geometryArray: BufferGeometry[] = [];
 
-    for (let index = 0; index < tilesCount - 1000000; index++) {
+    for (let index = 0; index < tilesCount; index++) {
         const { corners, x, y, z } = meshBytesUtils.getTileByIndex(index);
         const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(index);
         const isLand = elevation > waterElevation;
@@ -266,18 +313,13 @@ async function drawLayer() {
 
         const color = randomColor();
 
-        tileGeoArr.push(
-            createTileGeometry({
-                vertices,
-                isLand,
-                textureId: type,
-                center: { x, y, z: -z },
-                radius,
-                tileIndex: index,
-                color,
-                elevation,
-            })
-        );
+        const geometry = createTileGeometry({
+            vertices,
+            tileIndex: index,
+            color,
+        });
+
+        geometryArray.push(geometry);
 
         if (index % 10000 === 0) {
             const per = Math.round((index / tilesCount) * 100);
@@ -286,40 +328,94 @@ async function drawLayer() {
         }
     }
 
-    // 地块
-    const tilesGeo = BufferGeometryUtils.mergeGeometries(tileGeoArr, false);
+    {
+        // 这种方式可以大量减少使用的顶点达到降低内存占用
+        // 但是无法单独控制地块的颜色，因为顶点被多个地块
+        // 共用，插值会产生渐变，我草泥马
+        // const positions: number[] = []
+        // const colors: number[] = []
+        // const index: number[] = []
+        // const color2 = randomColor()
+        // const color3 = randomColor()
+        // for (let i = 0; i < cornersCount; i++) {
+        //     const { x, y, z } = meshBytesUtils.getCornerByIndex(i);
+        //     positions.push(x, y, -z)
+        // }
+        // for (let i = 0; i < tilesCount; i++) {
+        //     const { corners } = meshBytesUtils.getTileByIndex(i);
+        //     let color: XColor = null;
+        //     if (i % 10 === 0) {
+        //         color = color2
+        //     } else {
+        //         color = color3
+        //     }
+        //     const [v0, v1, v2, v3, v4, v5] = corners
+        //     corners.forEach(v => {
+        //         const v4 = v * 4;
+        //         colors[v4]= color[0]
+        //         colors[v4 + 1]= color[1]
+        //         colors[v4 + 2]= color[2]
+        //         colors[v4 + 3]= color[3]
+        //     })
+        //     const length = corners.length
+        //     if (length === 5) {
+        //         index.push(v0, v1, v2, v0, v2, v3, v0, v3, v4)
+        //     } else {
+        //         index.push(v0, v1, v2, v0, v2, v3, v0, v3, v4, v0, v4, v5)
+        //     }
+        // }
+        // const geometry = new BufferGeometry()
+        // geometry.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3))
+        // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4))
+        // geometry.setIndex(index)
+        // // geometry.computeVertexNormals()
+        // const material = new CustomShaderMaterial({
+        //     baseMaterial: MeshPhongMaterial,
+        //     vertexColors: true,
+        //     transparent: true,
+        //     // color: 0xff0000,
+        //     wireframe: true
+        // })
+        // const mesh = new Mesh(geometry, material)
+        // manager.scene.add(mesh)
+        // reture;
+    }
+
+    // 合并地块，减少 drawcall
+    const mergedGeometry = BufferGeometryUtils.mergeGeometries(geometryArray, false);
 
     // 普通材质
-    const tilesMat = new CustomShaderMaterial({
+    const material = new CustomShaderMaterial({
         baseMaterial: MeshPhongMaterial,
         vertexColors: true,
         // 用于图层
         transparent: true,
-        wireframe: true,
-        vertexShader: /* glsl */`
-            attribute float elevation;
+        // color: 0xff0000,
+        // wireframe: true,
+        vertexShader: /* glsl */ `
+            // attribute float elevation;
 
+            // void main() {
+            //     csm_Position += elevation * normal;
+            // }
+        `,
+        fragmentShader: /* glsl */ `
             void main() {
-                csm_Position += elevation * normal;
+
             }
         `,
-        fragmentShader: /* glsl */`
-            void main() {
-
-            }
-        `
     });
 
     // 不需要base，不渲染，节省内存
     // 基础图层，最底层图层，透明兜底
-    // const base = new Mesh(tilesGeo, tilesMat);
+    // const base = new Mesh(mergedGeometry, material);
     // base.renderOrder = RENDER_ORDER_BASE;
     // base.visible = false;
 
     // 地形图层，这里有点奇怪，base始终会覆盖到terrian上，待中出
     // 在切换图层时需特别处理
 
-    const mesh = new Mesh(tilesGeo, tilesMat);
+    const mesh = new Mesh(mergedGeometry, material);
 
     manager.scene.add(mesh);
 }
@@ -329,124 +425,97 @@ function randomColor(): XColor {
 }
 
 /** 创建单个地块的几何体 */
-export function createTileGeometry(op: {
-    vertices: Coordinate[];
-    isLand?: boolean;
-    minimap?: boolean;
-    textureId?: number;
-    center?: Coordinate;
-    radius?: number;
-    isCliff?: boolean;
-    tileIndex?: number;
-    color?: XColor;
-    elevation?: number;
-}) {
-    const geo = new BufferGeometry();
+export function createTileGeometry(op: { vertices: Coordinate[]; tileIndex?: number; color?: XColor }) {
+    const geometry = new BufferGeometry();
     const points: number[] = [];
     const colors: number[] = [];
-    const elevations: number[] = [];
-    // const normals: number[] = [];
 
-    const { vertices, color, elevation } = op;
+    const { vertices, color } = op;
 
-    const count = vertices.length
-    const center: number[] = []
-
-    let ax = 0, ay = 0, az = 0
-    for (let i = 0; i < count; i++) {
-        ax += vertices[i].x
-        ay += vertices[i].y
-        az += vertices[i].z
-    }
-
-    ax /= count;
-    ay /= count
-    az /= count
-
-    // 增加顶点数量，增加细分
-    for (let i = 0; i < count; i++) {
-        const p = vertices[i]
-        vertices.push({
-            x: (p.x + ax) / 2,
-            y: (p.y + ay) / 2,
-            z: (p.z + az) / 2,
-        })
-    }
-
-    // 加上中心
-    vertices.push({ x: ax, y: ay, z: az })
+    const count = vertices.length;
 
     vertices.forEach((v) => {
         const { x, y, z } = v;
         points.push(x, y, z);
-
         colors.push(...color);
-        elevations.push(elevation);
-        // 法向量取中心和格子中心的连线
-        // const normalsV3 = new Vector3(center.x, center.y, center.z).normalize();
-        // normals.push(-normalsV3.x, -normalsV3.y, -normalsV3.z);
     });
 
-    geo.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-    // 这里为了节省内存，用的是 Unit8array，那么colors里的每个元素的范围是 0~255的整数
-    // 这里包含了alpha通道，所以为 4
-    geo.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+    geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
+    // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
 
-    geo.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1));
-
-    // geo.setAttribute("normal", new BufferAttribute(new Float32Array(normals), 3));
     if (count === 6) {
         // 六边形顶点索引，注意在自动计算法向量时，采用的右手定则
         // 三角面的顶点索引顺序使用右手定则，大拇指方向为方向为法向量方向
         // 麻痹的 unity 使用左手坐标系，反起转，操
-        // geo.setIndex([0, 2, 1, 0, 3, 2, 0, 4, 3, 0, 5, 4]); // 右手
-        // geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]); // 左手
-        geo.setIndex([
-            0, 1, 7,
-            0, 7, 6,
-            1, 2, 8,
-            1, 8, 7,
-            2, 3, 9,
-            2, 9, 8,
-            3, 4, 10,
-            3, 10, 9,
-            4, 11, 10,
-            4, 5, 11,
-            5, 6, 11,
-            5, 0, 6,
-            6, 7, 12,
-            7, 8, 12,
-            8, 9, 12,
-            9, 10, 12,
-            10, 11, 12,
-            11, 6, 12
-        ])
+        // geometry.setIndex([0, 2, 1, 0, 3, 2, 0, 4, 3, 0, 5, 4]); // 右手
+        geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]); // 左手
     } else {
         // 五边形顶点索引
-        // geo.setIndex([0, 2, 1, 0, 3, 2, 0, 4, 3]); // 右手
-        // geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]); // 左手
-        geo.setIndex([
-            0, 1, 6,
-            0, 6, 5,
-            1, 2, 7,
-            1, 7, 6,
-            2, 3, 8,
-            2, 8, 7,
-            3, 4, 9,
-            3, 9, 8,
-            4, 5, 9,
-            4, 0, 5,
-            5, 6, 10,
-            6, 7, 10,
-            7, 8, 10,
-            8, 9, 10,
-            9, 5, 10
-        ])
+        // geometry.setIndex([0, 2, 1, 0, 3, 2, 0, 4, 3]); // 右手
+        geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]); // 左手
     }
 
-    geo.computeVertexNormals();
+    geometry.computeVertexNormals();
 
-    return geo;
+    return geometry;
+}
+
+/** 细分更多的结构 */
+export function createComplexTileGeometry(op: {
+    vertices: Coordinate[];
+    center: Coordinate;
+    tileIndex?: number;
+    color?: XColor;
+}) {
+    const geometry = new BufferGeometry();
+    const points: number[] = [];
+    const colors: number[] = [];
+
+    const { vertices, color, center } = op;
+
+    const count = vertices.length;
+
+    const { x, y, z } = center;
+
+    // 增加顶点数量，增加细分，直接取顶点到中心的中点
+    for (let i = 0; i < count; i++) {
+        const v = vertices[i];
+        vertices.push({
+            x: (v.x + x) / 2,
+            y: (v.y + y) / 2,
+            z: (v.z + z) / 2,
+        });
+    }
+
+    // 加上中心
+    vertices.push(center);
+
+    vertices.forEach((v) => {
+        const { x, y, z } = v;
+        points.push(x, y, z);
+        colors.push(...color);
+    });
+
+    geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
+    // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+
+    if (count === 6) {
+        // 正六边形再次细分为18个三角面
+        geometry.setIndex([
+            0, 1, 7, 0, 7, 6, 1, 2, 8, 1, 8, 7, 2, 3, 9, 2, 9, 8, 3, 4, 10, 3, 10, 9, 4, 11, 10, 4, 5, 11, 5, 6, 11, 5,
+            0, 6, 6, 7, 12, 7, 8, 12, 8, 9, 12, 9, 10, 12, 10, 11, 12, 11, 6, 12,
+        ]);
+    } else {
+        // 正五边形细分为15个三角面
+        geometry.setIndex([
+            0, 1, 6, 0, 6, 5, 1, 2, 7, 1, 7, 6, 2, 3, 8, 2, 8, 7, 3, 4, 9, 3, 9, 8, 4, 5, 9, 4, 0, 5, 5, 6, 10, 6, 7,
+            10, 7, 8, 10, 8, 9, 10, 9, 5, 10,
+        ]);
+    }
+
+    geometry.computeVertexNormals();
+
+    return geometry;
 }
 
 function render() {
@@ -513,4 +582,513 @@ export function appendCanvas(container: HTMLDivElement) {
 
 export function getMapInitStatus() {
     return mapInitStatus;
+}
+
+/** 返回点所在的分区 */
+export function getZoneByPoint(v: Vector3): GISZone {
+    const { lat, lng } = manager.vector3ToLatLng(v);
+    let lngZone = Math.floor(lng / LNG_DIVIDER);
+
+    if (lng >= 0) {
+        lngZone += 1;
+    } else {
+        lngZone += LNG_SLICES + 1;
+    }
+
+    let latZone = 0;
+
+    for (let i = 1; i < LAT_DIVIDER.length; i++) {
+        if (Math.abs(lat) <= LAT_DIVIDER[i]) {
+            latZone = i;
+            break;
+        }
+    }
+    if (lat < 0) {
+        latZone = LAT_SLICES / 2 - latZone + 1;
+    } else {
+        latZone += LAT_SLICES / 2;
+    }
+
+    // 检查
+    if (latZone === 0) return;
+
+    return [latZone, lngZone];
+}
+
+/**
+ * 获取当前 分区key string，特殊处理极地区域的 zonekey 务必通过此方法获取 key
+ * @param ignorePolar 如果为 true 将忽略掉合并分区，只考虑单个分区
+ */
+export function getZoneKey(zone: GISZone, ignorePolar?: boolean) {
+    const [lat] = zone;
+
+    if (isPolarZone(zone) && !ignorePolar) {
+        if (lat > LAT_SLICES / 2) {
+            return ZONE_KEY_POLAR_N;
+        } else {
+            return ZONE_KEY_POLAR_S;
+        }
+    }
+
+    return JSON.stringify(zone);
+}
+
+/** 是否是两极区域 */
+export function isPolarZone(zone: GISZone) {
+    const [lat] = zone;
+    // 注意 lat cong 南极到北极 从 1开始
+    if (lat === 1 || lat === LAT_SLICES) return true;
+
+    return false;
+}
+
+async function drawVirtualZone() {
+    const { radius } = meshBytesUtils.getHeader();
+
+    let center: Vector3 = null;
+    let zone: GISZone = null;
+
+    if (INIT_LAT_LNG) {
+        center = manager.latLngToVector3(INIT_LAT_LNG.lat, INIT_LAT_LNG.lng, radius);
+        zone = getZoneByPoint(center);
+    } else {
+        zone = INIT_GISZONE;
+        const { lat, lng } = getZoneBox(zone).center;
+        center = manager.latLngToVector3(lat, lng, radius);
+    }
+
+    const zones = { [getZoneKey(zone)]: zone };
+
+    // 初始化分区
+    await setZones(zones, center);
+}
+
+/**
+ * 设置当前分区，注意销毁之前的分区，创建新的分区
+ * @param pos 相机移动到的位置
+ */
+export async function setZones(zones: GISZoneMap, pos?: Vector3) {
+    if (zoom < EDIT_ZOOM) {
+        beforeZonesChange();
+
+        if (zones && Object.keys(zones).length > 0) {
+            await panToPos(pos);
+        }
+
+        removeZones();
+        gisZones = null;
+        return;
+    }
+
+    if (!zones || Object.keys(zones).length === 0) return;
+
+    // 一定要先移动相机再计算可见分区，否则不准确
+    await panToPos(pos);
+
+    const visibleZones = getVisibleZones(zones);
+    // 如果分区相同，不刷新分区
+    if (isEqualZones(visibleZones, gisZones)) return;
+    // 如果分区是包含关系，放大不刷新分区
+    if (isParentZones(gisZones, visibleZones)) return;
+
+    // isZonesChanging = true;
+
+    // updateCenterBox();
+
+    // switchMapMask(true);
+
+    beforeZonesChange();
+
+    await afterZonesChange(visibleZones);
+
+    // isZonesChanging = false;
+
+    // switchMapMask(false);
+}
+
+/**
+ * zones 改变之后
+ * @param force 如果为 true，会强制重新获取新的数据
+ * 通常数据在分区更改之后不会被销毁
+ */
+async function afterZonesChange(zones: GISZoneMap, force?: LayerStatus) {
+    // 绘制新的
+    await drawZones(zones);
+}
+
+/** 绘制分区 */
+async function drawZones(zones: GISZoneMap) {
+    if (!zones) return;
+    removeZones();
+    // 重新赋值
+    gisZones = zones;
+
+    curTileIndices = null;
+
+    curTileVertexIndexMap.clear();
+    curfaceTileIndexMap.clear();
+
+    const tileIndices = getZonesTileIndices(zones);
+
+    if (!tileIndices) return;
+
+    // 这两个量用的比较频繁，先保存下来
+    curTileIndices = tileIndices;
+
+    if (tileIndices.length === 0) return;
+    const zoneTilesGeoArray: BufferGeometry[] = [];
+    const zoneEdgeGeoArray: BufferGeometry[] = [];
+
+    // 预先分配好，减少计算
+    let accumFaceIndex = -1;
+    let accumVertexIndex = -1;
+
+    // 需要注意的是 unity 使用左后坐标系，z轴垂直屏幕向内
+    // threejs 使用右手坐标系，z轴垂直屏幕朝外
+    // 所有在 threejs 坐标系内使用 unity 坐标，需要把 z取反
+    for (let i = 0, len = tileIndices.length; i < len; i++) {
+        const index = tileIndices[i];
+
+        const { corners, x, y, z } = meshBytesUtils.getTileByIndex(index);
+
+        // 注意更多的细分
+        const corLen = corners.length;
+        const faceCount = corLen === 6 ? 18 : 15;
+        let _corLen = corLen;
+        let _faceCount = faceCount;
+
+        const tileVertexIndices: number[] = [];
+        while (_corLen > 0) {
+            tileVertexIndices.push(accumVertexIndex + _corLen);
+            _corLen--;
+        }
+        curTileVertexIndexMap.set(index, tileVertexIndices);
+        accumVertexIndex += corLen;
+
+        while (_faceCount > 0) {
+            curfaceTileIndexMap.set(accumFaceIndex + _faceCount, index);
+            _faceCount--;
+        }
+        accumFaceIndex += faceCount;
+
+        const vertices = corners.map<Coordinate>((v) => {
+            const corner = meshBytesUtils.getCornerByIndex(v);
+            return {
+                x: corner.x,
+                y: corner.y,
+                z: -corner.z,
+            };
+        });
+
+        // const { isCliff, cliffEdges } = getTileTerrianType(index);
+
+        // concatSetUnion(curCliffEdges, cliffEdges);
+
+        zoneTilesGeoArray.push(
+            createComplexTileGeometry({
+                vertices,
+                center: { x, y, z: -z },
+            })
+        );
+        zoneEdgeGeoArray.push(createTileEdgeGeometry(vertices));
+
+        // 通过睡眠 ease cpu 的计算
+        if (i % 5000 === 0) {
+            await sleep(0);
+        }
+    }
+
+    // createCliffEdgeLines();
+
+    // 地块
+    const tilesGeo = BufferGeometryUtils.mergeGeometries(zoneTilesGeoArray, false);
+    // tilesGeo.boundsTree = new MeshBVH(tilesGeo);
+
+    // 普通材质
+    const tilesMat = new MeshBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+    });
+
+    // 基础图层，最底层图层，透明兜底
+    curTileLayer = new Mesh(tilesGeo, tilesMat);
+    curTileLayer.renderOrder = RENDER_ORDER_BASE;
+    manager.scene.add(curTileLayer);
+
+    // 边界
+    const edgeGeo = BufferGeometryUtils.mergeGeometries(zoneEdgeGeoArray, false);
+    // mergedBordersGeo.boundsTree = new MeshBVH(mergedBordersGeo);
+    const edgeMat = new LineBasicMaterial({
+        vertexColors: true,
+        // 必须加这个参数，否则depthTest无效
+        transparent: true,
+        // depthTest: false,
+    });
+
+    curTileEdge = new LineSegments(edgeGeo, edgeMat);
+    curTileEdge.renderOrder = RENDER_ORDER_TOP_LINE;
+    // 加上边界
+    manager.scene.add(curTileEdge);
+
+    const { defalutLayerShow, activeMap } = store.getState().map;
+
+    let { mesh_edge: showMeshEdge } = defalutLayerShow[activeMap] || {};
+    showMeshEdge = Boolean(showMeshEdge);
+    curTileEdge.visible = showMeshEdge;
+}
+
+/**
+ * 获取分区内的格子索引，包括极点区域的 所有 tileindices w12-e12
+ * 务必只通过这个方法获取 tileindices
+ */
+export function getZonesTileIndices(zones: GISZoneMap) {
+    if (curTileIndices) return curTileIndices;
+
+    const tileIndices: number[] = [];
+    Object.values(zones).forEach((zone) => {
+        tileIndices.push(...getZoneTileIndices(zone));
+    });
+
+    return tileIndices;
+}
+
+/** 判断分区是否是包含关系 */
+export function isParentZones(parent: GISZoneMap, child: GISZoneMap) {
+    if (!parent || !child) return;
+
+    return Object.keys(child).every((k) => parent[k] != undefined);
+}
+
+/**
+ * 判断是否是 相同的分区，忽略顺序，对于极点区域，
+ * 做一个特殊处理，无论点击极点那块区域都视为点击极区，这里都选择第一块
+ */
+export function isEqualZones(zones1: GISZoneMap, zones2: GISZoneMap) {
+    if (!zones1 || !zones2) return false;
+
+    const polarN1 = zones1[ZONE_KEY_POLAR_N];
+    const polarS1 = zones1[ZONE_KEY_POLAR_S];
+
+    if (polarN1) {
+        polarN1[1] = 1;
+    }
+
+    if (polarS1) {
+        polarS1[1] = 1;
+    }
+
+    const polarN2 = zones2[ZONE_KEY_POLAR_N];
+    const polarS2 = zones2[ZONE_KEY_POLAR_S];
+
+    if (polarN2) {
+        polarN2[1] = 1;
+    }
+
+    if (polarS2) {
+        polarS2[1] = 1;
+    }
+    // 忽略顺序
+    return isEqual(zones1, zones2);
+}
+
+/** zones 改变之前 */
+function beforeZonesChange() {
+    if (!gisZones) return;
+}
+
+/** 销毁分区, 主要是图层和边界 */
+function removeZones() {
+    if (!gisZones) return;
+
+    if (curTileEdge) {
+        curTileEdge.removeFromParent();
+        curTileEdge.geometry.dispose();
+        // @ts-ignore
+        curTileEdge.material.dispose();
+
+        curTileEdge = null;
+    }
+
+    if (curTileLayer) {
+        curTileLayer.removeFromParent();
+        curTileLayer.geometry.dispose();
+        // @ts-ignore
+        curTileLayer.material.dispose();
+
+        curTileLayer = null;
+    }
+}
+
+function getVisibleZones(zones: GISZoneMap) {
+    if (!zones) return;
+
+    const all: GISZoneMap = {};
+
+    for (const zone of Object.values(zones)) {
+        if (isVisibleZone(zone)) {
+            all[getZoneKey(zone)] = zone;
+        }
+    }
+
+    let check: GISZoneMap = all;
+
+    while (Object.keys(check).length > 0) {
+        const add: GISZoneMap = {};
+
+        for (const zone of Object.values(check)) {
+            const adj = getAdjacentZones(zone);
+
+            for (const z of Object.values(adj)) {
+                const k = getZoneKey(z);
+                if (all[k] || !isVisibleZone(z)) continue;
+
+                all[k] = z;
+                add[k] = z;
+            }
+        }
+
+        check = add;
+    }
+
+    return all;
+}
+
+/** 获取该分区的相邻分区， 不包括自己 */
+function getAdjacentZones(zone: GISZone) {
+    const [lat] = zone;
+
+    const min = Math.max(1, lat - 1);
+    const max = Math.min(LAT_SLICES, lat + 1);
+
+    const zs: GISZoneMap = {};
+
+    for (let i = min; i <= max; i++) {
+        for (let j = 1; j <= LNG_SLICES; j++) {
+            const z: GISZone = [i, j];
+            const key = getZoneKey(z);
+
+            if (isAdjacentZones(zone, z) && !zs[key]) {
+                zs[key] = z;
+            }
+        }
+    }
+
+    return zs;
+}
+
+/** 判断是否是相邻分区 */
+function isAdjacentZones(zone1: GISZone, zone2: GISZone) {
+    if (!zone1 || !zone2) return false;
+
+    if (getZoneKey(zone1) === getZoneKey(zone2)) return false;
+
+    // 单独判断极区
+    if (isPolarZone(zone1) || isPolarZone(zone2)) {
+        //纬度分区差 为 1
+        if (Math.abs(zone2[0] - zone1[0]) === 1) return true;
+        return false;
+    }
+
+    const [zLat1, zLng1] = zone1;
+    const [zLat2, zLng2] = zone2;
+
+    if (Math.abs(zLat1 - zLat2) <= 1 && (Math.abs(zLng1 - zLng2) <= 1 || Math.abs(zLng1 - zLng2) === LNG_SLICES - 1)) {
+        return true;
+    }
+
+    return false;
+}
+
+/** 分区是否可见，也即是是否有格子出现在屏幕可见区域内 */
+function isVisibleZone(zone: GISZone) {
+    const tileIndices = getZoneTileIndices(zone);
+
+    return tileIndices.some((i) => isVisibleTile(i));
+}
+
+/** 格子是否在可视区域内 */
+export function isVisibleTile(index: number) {
+    if (index == undefined) return false;
+
+    const { x, y, z } = meshBytesUtils.getTileByIndex(index);
+
+    return isVisibleVector(new Vector3(x, y, -z));
+}
+
+/** 坐标是否可见 */
+export function isVisibleVector(v: Vector3) {
+    // 注意克隆一下，这个会改变原向量
+    const pos = manager.camera.position;
+
+    const dir = v.clone().sub(pos);
+
+    const n = manager.wpToNP(v);
+    // 点是否可见需要在屏幕内，在相机视锥体内，面对相机
+    return Math.abs(n.x) <= 1 && Math.abs(n.y) <= 1 && Math.abs(n.z) <= 1 && dir.dot(v) < -0.2;
+}
+
+/**
+ * 获取单个分区内的格子索引，包括极点区域的 所有 tileindices w12-e12
+ * 如果该区域处于极地区域，会返回极地区域所有的格子
+ */
+function getZoneTileIndices(zone: GISZone) {
+    if (isPolarZone(zone)) {
+        const [lat] = zone;
+        const indices: number[] = [];
+        for (let i = 1; i <= LNG_SLICES; i++) {
+            const _indices = zoneTileIndicesMap.get(getZoneKey([lat, i], true));
+            indices.push(..._indices);
+        }
+
+        return indices;
+    }
+
+    return zoneTileIndicesMap.get(getZoneKey(zone));
+}
+
+export function getTileVec(tileInex: number) {
+    const { x, y, z } = meshBytesUtils.getTileByIndex(tileInex);
+    return new Vector3(x, y, -z);
+}
+
+/** 获取分区的包围盒 */
+export function getZoneBox(zone: GISZone) {
+    let [lat, lng] = zone;
+
+    let top = 0,
+        bottom = 0,
+        right = 0,
+        left = 0;
+
+    if (lat > LAT_SLICES / 2) {
+        lat = lat - LAT_SLICES / 2;
+        top = LAT_DIVIDER[lat];
+        bottom = LAT_DIVIDER[lat - 1];
+    } else {
+        lat = LAT_SLICES / 2 - lat;
+        top = -LAT_DIVIDER[lat];
+        bottom = -LAT_DIVIDER[lat + 1];
+    }
+
+    if (lng <= LNG_SLICES / 2) {
+        right = LNG_DIVIDER * lng;
+        left = LNG_DIVIDER * (lng - 1);
+    } else {
+        lng = LNG_SLICES - lng;
+        left = -(lng + 1) * LNG_DIVIDER;
+        right = -lng * LNG_DIVIDER;
+    }
+
+    return { left, right, top, bottom, center: { lat: (top + bottom) / 2, lng: (left + right) / 2 } };
+}
+
+/** 移动相机到该坐标上 */
+export async function panToPos(pos: Vector3) {
+    if (!pos) return;
+
+    return new Promise((resolve) => {
+        const oldPos = manager.camera.position;
+        const des = manager.calcCollinearVector(pos, oldPos.length());
+        manager.createCameraSphereTween(oldPos, des).onComplete(() => resolve(true));
+    });
 }

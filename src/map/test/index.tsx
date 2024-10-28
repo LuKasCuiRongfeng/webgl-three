@@ -54,8 +54,9 @@ export default function Test() {
         const axies1 = new AxesHelper(5);
         scene.add(axies);
 
-        const points = [2, 0, 0, 0, 2, 0, 0, 0, 2];
+        const points = [2, 0, 0, 0, 2, 0, 0, 0, 2, 3, 3,3];
         const geo = new BufferGeometry();
+        geo.setIndex([0, 1, 2, 1, 2, 3])
         geo.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
         const mesh = new Mesh(
             geo,
@@ -68,27 +69,30 @@ export default function Test() {
         scene.add(mesh);
 
         mesh.position.set(3, 3, 3);
+        // mesh.rotation.set(0.5, 0.5, 0.5)
 
-        mesh.rotation.y = 0.5;
+        // mesh.rotation.y = 0.5;
 
-        geo.translate(-3, -3, -3);
+        // geo.translate(-3, -3, -3);
 
-        console.log(mesh.position);
+        console.log(mesh.geometry)
 
-        const plane = new Mesh(new PlaneGeometry(5, 5, 10, 10), new MeshPhysicalMaterial({ color: 0xff0000 }));
+        console.log(mesh.geometry.getAttribute("position").array);
 
-        plane.rotation.y = 0.4
+        // const plane = new Mesh(new PlaneGeometry(5, 5, 10, 10), new MeshPhysicalMaterial({ color: 0xff0000 }));
 
-        const sphere = new Mesh(new SphereGeometry(10, 20, 20), new MeshPhysicalMaterial({ color: 0x00ff00, wireframe: true }));
+        // plane.rotation.y = 0.4
 
-        scene.add(plane, sphere)
+        // const sphere = new Mesh(new SphereGeometry(10, 20, 20), new MeshPhysicalMaterial({ color: 0x00ff00, wireframe: true }));
 
-        const n = new Vector3(1, 1, 1).normalize()
-        const p = new Vector3(6, 6, 6)
+        // scene.add(plane, sphere)
 
-        const matrix = new Matrix4()
-        matrix.compose(p, new Quaternion().setFromUnitVectors(new Vector3(0, 0, 1), n), new Vector3(1, 1, 1))
-        plane.applyMatrix4(matrix)
+        // const n = new Vector3(1, 1, 1).normalize()
+        // const p = new Vector3(6, 6, 6)
+
+        // const matrix = new Matrix4()
+        // matrix.compose(p, new Quaternion().setFromUnitVectors(new Vector3(0, 0, 1), n), new Vector3(1, 1, 1))
+        // plane.applyMatrix4(matrix)
 
         // const targetP = new Vector3(5, 5, 5);
         // const n = new Vector3(2, 2, 2).normalize();
