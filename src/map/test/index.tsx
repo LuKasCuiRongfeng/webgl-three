@@ -2,11 +2,14 @@ import { useEffect, useRef } from "react";
 import {
     AmbientLight,
     AxesHelper,
+    BoxGeometry,
     BufferAttribute,
     BufferGeometry,
+    ConeGeometry,
     DirectionalLight,
     DoubleSide,
     EdgesGeometry,
+    Float32BufferAttribute,
     FrontSide,
     IcosahedronGeometry,
     LineBasicMaterial,
@@ -24,10 +27,15 @@ import {
     WebGLRenderer,
 } from "three";
 import CustomShaderMaterial from "three-custom-shader-material/vanilla";
-import { OrbitControls } from "three/examples/jsm/Addons.js";
+import { OrbitControls, MapControls } from "three/examples/jsm/Addons.js";
 
 import vert from "./vert.glsl";
 import frag from "./frag.glsl";
+import { MeshPhongNodeMaterial } from "three/webgpu";
+
+const min_dis = 30;
+
+let low_height = false;
 
 export default function Test() {
     const canvasRef = useRef<HTMLCanvasElement>();
@@ -41,43 +49,165 @@ export default function Test() {
         const renderer = new WebGLRenderer({ antialias: true, canvas });
         const scene = new Scene();
 
-        const camera = new PerspectiveCamera(75, 1.5, 0.1, 100);
-        camera.position.set(0, 0, 20);
+        const camera = new PerspectiveCamera(75, 1.5, 0.1, 500);
+        camera.position.set(0, 0, 50);
         const controls = new OrbitControls(camera, canvas);
+        controls.enableDamping = false;
+        // controls.maxPolarAngle = Math.PI / 2;
+        controls.enablePan = false;
 
         const light = new DirectionalLight(0xffffff, 1);
         light.position.set(20, 20, 20);
         const ambient = new AmbientLight(0xffffff, 1);
         scene.add(light, ambient);
 
-        const axies = new AxesHelper(20);
-        const axies1 = new AxesHelper(5);
-        scene.add(axies);
+        const axis = new AxesHelper(15)
+        scene.add(axis)
 
-        const points = [2, 0, 0, 0, 2, 0, 0, 0, 2, 3, 3,3];
-        const geo = new BufferGeometry();
-        geo.setIndex([0, 1, 2, 1, 2, 3])
-        geo.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-        const mesh = new Mesh(
-            geo,
-            new MeshPhongMaterial({
-                color: 0xff0000,
-                side: DoubleSide,
-            })
-        );
-        mesh.add(axies1);
-        scene.add(mesh);
+        const box = new Mesh(new BoxGeometry(10, 10, 10), new MeshPhongMaterial({ color: 0x00ff00 }))
+        scene.add(box)
+        box.add(axis.clone())
+        box.translateX(10)
+        
 
-        mesh.position.set(3, 3, 3);
+        setTimeout(() => {
+            const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4)
+            box.quaternion.copy(q)
+
+            camera.rotateX(Math.PI / 5)
+
+            console.log(camera.up)
+
+            setTimeout(() => {
+                const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4)
+                box.quaternion.copy(q.invert())
+            }, 2000);
+        }, 2000);
+
+        // const radius = 15;
+        // controls.minDistance = radius + 1;
+        // const material = new CustomShaderMaterial({
+        //     baseMaterial: MeshPhongMaterial,
+        //     color: 0x00ff00,
+        //     wireframe: true,
+        //     vertexShader: /* glsl */ `
+        //         attribute float elevation;
+
+        //         void main() {
+        //             csm_Position += normal * elevation;
+        //         }
+        //     `,
+        //     fragmentShader: /* glsl */ `
+                
+        //     `,
+        // });
+
+        // const geometry = new SphereGeometry(radius, 50, 50);
+        // const elevations: number[] = [];
+        // const count = geometry.getAttribute("position").count;
+        // for (let i = 0; i < count; i++) {
+        //     elevations.push(Math.random());
+        // }
+        // geometry.setAttribute("elevation", new Float32BufferAttribute(elevations, 1));
+
+        // const sphere = new Mesh(geometry, material);
+
+        // const cone = new Mesh(
+        //     new ConeGeometry(radius, 10, 50),
+        //     new MeshPhongMaterial({
+        //         color: 0x00ff00,
+        //         wireframe: true,
+        //     })
+        // );
+
+        // scene.add(sphere);
+
+        // let i = 1
+
+        // setInterval(() => {
+        //     const v = Math.pow(-1, i)
+        //     // camera.up.set(0, 10 * v, 0)
+        //     // camera.lookAt(0, 0, 0)
+
+        //     // const { x, y, z } = camera.position
+        //     // console.log(x, y, z)
+        //     camera.rotation.set(1, 1, 1)
+        //     controls.update()
+        //     console.log(camera.up.toArray())
+        //     i++
+        // }, 1000);
+
+        controls.addEventListener("change", () => {
+            // const pos = camera.position;
+            // const length = pos.length()
+            // const toSurface = length - radius;
+            // if (toSurface > 20) {
+            //     controls.target.set(0, 0, 0)
+            //     return
+            // }
+            // const transition = (1 - (toSurface / 20)) * MAX
+            // const vertical = new Vector3(0, length / Math.tan(transition), 0)
+            // const target = vertical.clone().sub(pos).normalize().multiplyScalar(10)
+            // // const sp = pos.clone().normalize().multiplyScalar(radius)
+            // // const normal = sp.clone().normalize()
+            // // const forward = 10 * transition
+            // // const tp = sp.clone().add(new Vector3(normal.x * forward, normal.y * forward, normal.z * forward))
+            // // const ct = new Vector3()
+            // // ct.lerpVectors(new Vector3(0, 0, 0), tp, Math.pow(transition, 2))
+            // controls.target.copy(target)
+        });
+
+        // controls.addEventListener("end", () => {
+        //     const dis = camera.position.length() - radius;
+        //     console.log(low_height, dis)
+        //     if (dis < min_dis && !low_height) {
+        //         controls.target.copy(camera.position.clone().normalize().multiplyScalar(radius));
+
+        //         controls.enablePan = true;
+        //         controls.minPolarAngle = Math.PI / 3;
+        //         controls.minAzimuthAngle = 0
+        //         controls.maxAzimuthAngle = 0;
+        //         controls.minDistance = 1;
+        //         controls.update();
+        //         low_height = true
+        //     }
+
+        //     if (dis > min_dis && low_height) {
+        //         controls.target.copy(new Vector3(0, 0, 0));
+        //         controls.enablePan = false;
+        //         controls.minPolarAngle = 0;
+        //         controls.minAzimuthAngle = Infinity
+        //         controls.maxAzimuthAngle = Infinity
+        //         controls.minDistance = radius + 1;
+        //         controls.update();
+        //         low_height = false
+        //     }
+        // });
+
+        // const axies = new AxesHelper(20);
+        // const axies1 = new AxesHelper(5);
+        // scene.add(axies);
+
+        // const points = [2, 0, 0, 0, 2, 0, 0, 0, 2, 3, 3,3];
+        // const geo = new BufferGeometry();
+        // geo.setIndex([0, 1, 2, 1, 2, 3])
+        // geo.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
+        // const mesh = new Mesh(
+        //     geo,
+        //     new MeshPhongMaterial({
+        //         color: 0xff0000,
+        //         side: DoubleSide,
+        //     })
+        // );
+        // mesh.add(axies1);
+        // scene.add(mesh);
+
+        // mesh.position.set(3, 3, 3);
         // mesh.rotation.set(0.5, 0.5, 0.5)
 
         // mesh.rotation.y = 0.5;
 
         // geo.translate(-3, -3, -3);
-
-        console.log(mesh.geometry)
-
-        console.log(mesh.geometry.getAttribute("position").array);
 
         // const plane = new Mesh(new PlaneGeometry(5, 5, 10, 10), new MeshPhysicalMaterial({ color: 0xff0000 }));
 
@@ -169,7 +299,7 @@ export default function Test() {
 
         renderer.setAnimationLoop(() => {
             renderer.render(scene, camera);
-            controls.update();
+            // controls.update();
             // mesh.rotation.y += 0.1
         });
     };

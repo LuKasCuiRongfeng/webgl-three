@@ -33,17 +33,23 @@ import {
     LAT_SLICES,
     LNG_DIVIDER,
     LNG_SLICES,
+    MAX_CLICKING_TIME,
+    MAX_MOVE_DELTA_SQA,
+    MAX_ZOOM,
+    MIN_ZOOM,
     TILE_LAND_ALPHA_COLOR,
     TILE_LAND_COLOR,
     WIDTH_SEGMENTS,
     ZONE_KEY_POLAR_N,
     ZONE_KEY_POLAR_S,
+    ZOOM_DIS,
+    ZOOM_SPEED,
 } from "./consts";
 import { Coordinate, GISZone, GISZoneMap, GISZoneTileIndicesMap, MapInitStatus, XColor } from "./types";
 
 import fragment from "./frag.glsl";
 import vertex from "./vert.glsl";
-import { isEqual } from "lodash-es";
+import { debounce, isEqual } from "lodash-es";
 
 /** 操作地图数据的对象 */
 let mapBytesUtils: MapBytesUtils = null;
@@ -119,6 +125,12 @@ let zoom = INIT_ZOOM;
  */
 let gisZones: GISZoneMap = {};
 
+let controlChanging = false;
+
+let globalMesh: Mesh = null;
+
+let isLowHeight = false;
+
 export async function initMap() {
     if (haveInitialed) {
         // 已经初始化了
@@ -192,6 +204,64 @@ function initCamera() {
     control.enablePan = false;
     control.maxDistance = radius + CAMEARA_TO_EARTH_MAX_DIS;
     control.minDistance = radius + CAMEARA_TO_EARTH_MIN_DIS;
+
+    setControl(false);
+
+    registerControlEvent();
+}
+
+function cameraControlChanging() {
+    controlChanging = true;
+    needsUpdateWhenControlChanging();
+}
+
+function cameraControlChanged() {
+    controlChanging = false;
+    needsUpdateAfterControlChanged();
+
+    const controls = getOrbitControls();
+    if (zoom >= EDIT_ZOOM && !isLowHeight) {
+        const pos = manager.camera.position;
+        // 修改target
+        controls.target.copy(pos.clone().normalize().multiplyScalar(earthRadius));
+        controls.enablePan = true;
+        controls.minPolarAngle = Math.PI / 2;
+        // controls.minAzimuthAngle = 0
+        // controls.maxAzimuthAngle = 0;
+        controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS;
+        controls.rotateSpeed = 1;
+        controls.zoomSpeed = 1;
+        controls.update();
+        isLowHeight = true;
+    } else if (zoom < EDIT_ZOOM && isLowHeight) {
+        controls.target.copy(new Vector3(0, 0, 0));
+        controls.enablePan = false;
+        controls.minPolarAngle = 0;
+        controls.minAzimuthAngle = Infinity;
+        controls.maxAzimuthAngle = Infinity;
+        controls.minDistance = earthRadius + CAMEARA_TO_EARTH_MIN_DIS;
+        controls.update();
+        isLowHeight = false;
+    }
+}
+
+/** 一些需要 在相机控制器改变时的操作放这里 */
+function needsUpdateWhenControlChanging() {
+    setChangingControl();
+}
+
+/** 一些需要 在相机控制器改结束后的操作放这里 */
+function needsUpdateAfterControlChanged() {
+    setControl();
+}
+
+/** 注册控件事件 */
+function registerControlEvent() {
+    const control = getOrbitControls();
+
+    control.addEventListener("change", cameraControlChanging);
+
+    control.addEventListener("end", debounce(cameraControlChanged, 500, { trailing: true }));
 }
 
 /** 获取经纬度转 tileindex 工具 */
@@ -294,6 +364,8 @@ async function preprocessInstanceTiles() {
 }
 
 async function drawLayer() {
+    if (globalMesh) return;
+
     const { tilesCount, radius } = meshBytesUtils.getHeader();
     const geometryArray: BufferGeometry[] = [];
 
@@ -317,6 +389,7 @@ async function drawLayer() {
             vertices,
             tileIndex: index,
             color,
+            elevation,
         });
 
         geometryArray.push(geometry);
@@ -393,15 +466,19 @@ async function drawLayer() {
         // color: 0xff0000,
         // wireframe: true,
         vertexShader: /* glsl */ `
-            // attribute float elevation;
+            attribute float elevation;
+            varying float vElevation;
 
-            // void main() {
-            //     csm_Position += elevation * normal;
-            // }
+            void main() {
+                csm_Position += elevation * normal;
+
+                vElevation = elevation;
+            }
         `,
         fragmentShader: /* glsl */ `
+            varying float vElevation;
             void main() {
-
+                csm_DiffuseColor = vec4(vec3(vElevation), 1.0);
             }
         `,
     });
@@ -415,9 +492,9 @@ async function drawLayer() {
     // 地形图层，这里有点奇怪，base始终会覆盖到terrian上，待中出
     // 在切换图层时需特别处理
 
-    const mesh = new Mesh(mergedGeometry, material);
+    globalMesh = new Mesh(mergedGeometry, material);
 
-    manager.scene.add(mesh);
+    manager.scene.add(globalMesh);
 }
 
 function randomColor(): XColor {
@@ -425,12 +502,18 @@ function randomColor(): XColor {
 }
 
 /** 创建单个地块的几何体 */
-export function createTileGeometry(op: { vertices: Coordinate[]; tileIndex?: number; color?: XColor }) {
+export function createTileGeometry(op: {
+    vertices: Coordinate[];
+    tileIndex?: number;
+    color?: XColor;
+    elevation?: number;
+}) {
     const geometry = new BufferGeometry();
     const points: number[] = [];
     const colors: number[] = [];
+    const elevations: number[] = []
 
-    const { vertices, color } = op;
+    const { vertices, color, elevation } = op;
 
     const count = vertices.length;
 
@@ -438,10 +521,12 @@ export function createTileGeometry(op: { vertices: Coordinate[]; tileIndex?: num
         const { x, y, z } = v;
         points.push(x, y, z);
         colors.push(...color);
+        elevations.push(elevation)
     });
 
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-    // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+    geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+    geometry.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1));
 
     if (count === 6) {
         // 六边形顶点索引，注意在自动计算法向量时，采用的右手定则
@@ -466,38 +551,50 @@ export function createComplexTileGeometry(op: {
     center: Coordinate;
     tileIndex?: number;
     color?: XColor;
+    elevation?: number;
 }) {
     const geometry = new BufferGeometry();
     const points: number[] = [];
     const colors: number[] = [];
+    const elevations: number[] = [];
 
-    const { vertices, color, center } = op;
+    const { vertices, color, center, elevation } = op;
 
     const count = vertices.length;
 
-    const { x, y, z } = center;
+    // const { x, y, z } = center;
 
     // 增加顶点数量，增加细分，直接取顶点到中心的中点
     for (let i = 0; i < count; i++) {
         const v = vertices[i];
         vertices.push({
-            x: (v.x + x) / 2,
-            y: (v.y + y) / 2,
-            z: (v.z + z) / 2,
+            // x: (v.x + x) / 2,
+            // y: (v.y + y) / 2,
+            // z: (v.z + z) / 2,
+            x: v.x,
+            y: v.y,
+            z: v.z,
         });
     }
 
     // 加上中心
     vertices.push(center);
 
-    vertices.forEach((v) => {
+    vertices.forEach((v, i) => {
         const { x, y, z } = v;
         points.push(x, y, z);
         colors.push(...color);
+
+        if (i < count) {
+            elevations.push(0);
+        } else {
+            elevations.push(elevation);
+        }
     });
 
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-    // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+    geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+    geometry.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1));
 
     if (count === 6) {
         // 正六边形再次细分为18个三角面
@@ -527,7 +624,7 @@ function render() {
         // }
         manager.resizeRendererToDisplaySize();
 
-        getOrbitControls().update();
+        // getOrbitControls().update();
 
         // setIsolatedLinesResolution();
 
@@ -664,11 +761,123 @@ async function drawVirtualZone() {
 }
 
 /**
+ * 这里会根据距离来调整旋转缩放的速度
+ * @param needsZonesUpdate zones 是否需要更新 default = true
+ */
+async function setControl(needsZonesUpdate = true) {
+    if (!manager) return;
+
+    const pos = manager.camera.position;
+    // const dis = pos.length();
+    // const control = getOrbitControls();
+    // const { radius } = meshBytesUtils.getHeader();
+
+    // // control 的改变同样会影响 zoom
+    // let _zoom = MAX_ZOOM;
+
+    // while (_zoom > 0) {
+    //     if (dis - radius <= ZOOM_DIS.get(_zoom) * mapMultiple) {
+    //         zoom = _zoom;
+    //         break;
+    //     }
+    //     _zoom--;
+    // }
+
+    // 控制缩放的速度和旋转的速度
+    // const speed = ZOOM_SPEED.get(zoom) * mapMultiple;
+
+    // if (speed) {
+    //     control.rotateSpeed = speed;
+    //     control.zoomSpeed = speed * 2;
+    // }
+
+    if (!needsZonesUpdate) return;
+    // 需要更新分区
+    const zone = getZoneByPoint(pos);
+    await setZones({ [getZoneKey(zone)]: zone });
+}
+
+function setChangingControl() {
+    if (!manager) return;
+
+    const pos = manager.camera.position;
+    const dis = pos.length();
+    const control = getOrbitControls();
+
+    // control 的改变同样会影响 zoom
+    let _zoom = MAX_ZOOM;
+
+    while (_zoom > 0) {
+        if (dis - earthRadius <= ZOOM_DIS.get(_zoom)) {
+            zoom = _zoom;
+            break;
+        }
+        _zoom--;
+    }
+
+    // 控制缩放的速度和旋转的速度
+    const speed = ZOOM_SPEED.get(zoom);
+
+    if (speed && !isLowHeight) {
+        control.rotateSpeed = speed;
+        control.zoomSpeed = speed * 3.6;
+    } else if (isLowHeight) {
+        control.rotateSpeed = 1;
+        control.zoomSpeed = 1;
+    }
+}
+
+/** 设置缩放 */
+export function setZoom(_zoom: number) {
+    if (_zoom > MAX_ZOOM) {
+        _zoom = MAX_ZOOM;
+    }
+    if (_zoom < MIN_ZOOM) {
+        _zoom = MIN_ZOOM;
+    }
+
+    if (_zoom === zoom) return;
+
+    zoom = _zoom;
+
+    const dis = ZOOM_DIS.get(zoom);
+    if (!dis) return;
+
+    const ts = dis + meshBytesUtils.getHeader().radius;
+    const position = manager.camera.position;
+
+    const des = manager.calcCollinearVector(position, ts);
+
+    // zoom 的改变会影响 control
+    // zoom 不涉及球体旋转，不使用球面插值动画
+    manager.createCameraTween(position, des).onComplete(() => {
+        setControl();
+    });
+}
+
+/**
+ * 是否是在点击画布，由于点击事件同时会触发 control的事件，
+ * 在这里做一个区分，如果用户点击的时间很短，并且鼠标移动
+ * 了很短的距离，认为用户只是在点击，而不是在拖拽地图
+ */
+export function isClickCanvas() {
+    if (
+        mapClickEndTime - mapClickStartTime < MAX_CLICKING_TIME &&
+        (mapClickEndPos.x - mapClickStartPos.x) ** 2 + (mapClickEndPos.y - mapClickStartPos.y) ** 2 < MAX_MOVE_DELTA_SQA
+    ) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
  * 设置当前分区，注意销毁之前的分区，创建新的分区
  * @param pos 相机移动到的位置
  */
 export async function setZones(zones: GISZoneMap, pos?: Vector3) {
     if (zoom < EDIT_ZOOM) {
+        globalMesh.visible = true;
         beforeZonesChange();
 
         if (zones && Object.keys(zones).length > 0) {
@@ -679,6 +888,8 @@ export async function setZones(zones: GISZoneMap, pos?: Vector3) {
         gisZones = null;
         return;
     }
+
+    globalMesh.visible = false;
 
     if (!zones || Object.keys(zones).length === 0) return;
 
@@ -711,7 +922,7 @@ export async function setZones(zones: GISZoneMap, pos?: Vector3) {
  * @param force 如果为 true，会强制重新获取新的数据
  * 通常数据在分区更改之后不会被销毁
  */
-async function afterZonesChange(zones: GISZoneMap, force?: LayerStatus) {
+async function afterZonesChange(zones: GISZoneMap) {
     // 绘制新的
     await drawZones(zones);
 }
@@ -750,10 +961,11 @@ async function drawZones(zones: GISZoneMap) {
         const index = tileIndices[i];
 
         const { corners, x, y, z } = meshBytesUtils.getTileByIndex(index);
+        const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(index);
 
         // 注意更多的细分
-        const corLen = corners.length;
-        const faceCount = corLen === 6 ? 18 : 15;
+        const corLen = corners.length === 6 ? 12 : 11;
+        const faceCount = corLen === 12 ? 18 : 15;
         let _corLen = corLen;
         let _faceCount = faceCount;
 
@@ -784,13 +996,16 @@ async function drawZones(zones: GISZoneMap) {
 
         // concatSetUnion(curCliffEdges, cliffEdges);
 
+        const color = randomColor();
+
         zoneTilesGeoArray.push(
             createComplexTileGeometry({
                 vertices,
                 center: { x, y, z: -z },
+                color,
+                elevation,
             })
         );
-        zoneEdgeGeoArray.push(createTileEdgeGeometry(vertices));
 
         // 通过睡眠 ease cpu 的计算
         if (i % 5000 === 0) {
@@ -805,36 +1020,40 @@ async function drawZones(zones: GISZoneMap) {
     // tilesGeo.boundsTree = new MeshBVH(tilesGeo);
 
     // 普通材质
-    const tilesMat = new MeshBasicMaterial({
+    const tilesMat = new CustomShaderMaterial({
+        baseMaterial: MeshPhongMaterial,
         vertexColors: true,
         transparent: true,
+        // wireframe: true,
+        vertexShader: /* glsl */ `
+            attribute float elevation;
+            varying float vElevation;
+
+            void main() {
+                csm_Position += elevation * normal;
+
+                vElevation = elevation;
+            }
+        `,
+        fragmentShader: /* glsl */ `
+            varying float vElevation;
+
+            void main() {
+                vec3 color = vec3(0.2, 0.2, 0.2);
+                float colorMix = smoothstep(0.0, 1., vElevation);
+                color = mix(color, vec3(0.0, 1.0, 0.0), colorMix);
+                float colorMix1 = step(1., vElevation);
+                color = mix(color, vec3(0.0, 1.0, 1.0), colorMix1);
+                float colorMix2 = step(12., vElevation);
+                color = mix(color, vec3(1.0, 1.0, 1.0), colorMix2);
+
+                csm_DiffuseColor = vec4(color, 1.0);
+            }
+        `,
     });
 
-    // 基础图层，最底层图层，透明兜底
     curTileLayer = new Mesh(tilesGeo, tilesMat);
-    curTileLayer.renderOrder = RENDER_ORDER_BASE;
     manager.scene.add(curTileLayer);
-
-    // 边界
-    const edgeGeo = BufferGeometryUtils.mergeGeometries(zoneEdgeGeoArray, false);
-    // mergedBordersGeo.boundsTree = new MeshBVH(mergedBordersGeo);
-    const edgeMat = new LineBasicMaterial({
-        vertexColors: true,
-        // 必须加这个参数，否则depthTest无效
-        transparent: true,
-        // depthTest: false,
-    });
-
-    curTileEdge = new LineSegments(edgeGeo, edgeMat);
-    curTileEdge.renderOrder = RENDER_ORDER_TOP_LINE;
-    // 加上边界
-    manager.scene.add(curTileEdge);
-
-    const { defalutLayerShow, activeMap } = store.getState().map;
-
-    let { mesh_edge: showMeshEdge } = defalutLayerShow[activeMap] || {};
-    showMeshEdge = Boolean(showMeshEdge);
-    curTileEdge.visible = showMeshEdge;
 }
 
 /**
