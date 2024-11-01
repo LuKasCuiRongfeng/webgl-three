@@ -79,6 +79,12 @@ import {
     MeshLambertMaterial,
     MeshStandardMaterial,
     MeshPhysicalMaterial,
+    InstancedBufferGeometry,
+    InstancedBufferAttribute,
+    InstancedMesh,
+    Matrix4,
+    Uniform,
+    Float32BufferAttribute
 } from "three";
 
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -100,6 +106,7 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { ImprovedNoise } from "three/examples/jsm/math/ImprovedNoise.js";
+import Stats from "three/addons/libs/stats.module.js"
 
 import CustomShaderMaterial from "three-custom-shader-material/vanilla"
 // ----------------------------------------------------
@@ -688,5 +695,13 @@ export {
     MeshLambertMaterial,
     MeshStandardMaterial,
     MeshPhysicalMaterial,
-    CustomShaderMaterial
+    CustomShaderMaterial,
+    InstancedBufferGeometry,
+    InstancedBufferAttribute,
+    InstancedMesh,
+    Matrix4,
+    Quaternion,
+    Stats,
+    Uniform,
+    Float32BufferAttribute
 };
