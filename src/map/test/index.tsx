@@ -41,7 +41,19 @@ export default function Test() {
     const canvasRef = useRef<HTMLCanvasElement>();
 
     useEffect(() => {
+        const canvas = canvasRef.current;
         run();
+
+        canvas.addEventListener("pointerdown", (e) => {
+            canvas.setPointerCapture(e.pointerId)
+            console.log(e.pointerId, e.pointerType);
+        });
+        canvas.addEventListener("pointermove", (e) => {
+            console.log(e.pointerId, e.pointerType);
+        });
+        canvas.addEventListener("pointerup", (e) => {
+            console.log(e.pointerId, e.pointerType);
+        });
     }, []);
 
     const run = () => {
@@ -61,26 +73,25 @@ export default function Test() {
         const ambient = new AmbientLight(0xffffff, 1);
         scene.add(light, ambient);
 
-        const axis = new AxesHelper(15)
-        scene.add(axis)
+        const axis = new AxesHelper(15);
+        scene.add(axis);
 
-        const box = new Mesh(new BoxGeometry(10, 10, 10), new MeshPhongMaterial({ color: 0x00ff00 }))
-        scene.add(box)
-        box.add(axis.clone())
-        box.translateX(10)
-        
+        const box = new Mesh(new BoxGeometry(10, 10, 10), new MeshPhongMaterial({ color: 0x00ff00 }));
+        scene.add(box);
+        box.add(axis.clone());
+        box.translateX(10);
 
         setTimeout(() => {
-            const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4)
-            box.quaternion.copy(q)
+            const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4);
+            box.quaternion.copy(q);
 
-            camera.rotateX(Math.PI / 5)
+            camera.rotateX(Math.PI / 5);
 
-            console.log(camera.up)
+            console.log(camera.up);
 
             setTimeout(() => {
-                const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4)
-                box.quaternion.copy(q.invert())
+                const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4);
+                box.quaternion.copy(q.invert());
             }, 2000);
         }, 2000);
 
@@ -98,7 +109,7 @@ export default function Test() {
         //         }
         //     `,
         //     fragmentShader: /* glsl */ `
-                
+
         //     `,
         // });
 
