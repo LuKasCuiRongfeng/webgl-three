@@ -1,3 +1,5 @@
+import { LineSegments } from "./three-manager";
+
 /** uv 坐标 */
 export type UV = [number, number];
 
@@ -37,3 +39,41 @@ export type MapInitStatus = {
     /** 初始化合并进度 */
     combinePercent?: number;
 };
+
+// --------------------------------------------------------
+// --------------------------------------------------------
+// ------------------ 分区 ----------------------------
+/** 地理坐标分区
+ * 采用东西经度从本初子午线 0° 开始，每隔开一定经度划一个经度大区，
+ * 从 0 ~ 360 依次标为 1 2 3 4 5 ...
+ * 在每个经度大区里，从极点 -90° 开始在南北纬隔开一定经度划一个纬度大区，
+ * const -90~90 依次标为 1 2 3 4 5 ...
+ * 如何定位一个区？采用二元数定位，并按照先纬度后经度的惯例
+ * 比如 [1, 1]
+ * 按照惯例，先纬度后经度
+ */
+export type GISZone = [number, number];
+
+/** key = JSON.stringify(GISZone), Map里直接用GISZone有问题，转一下，在极地区域做了特殊处理
+ * 北极 用 N，南极用 S
+ */
+export type GISZoneKey = string;
+
+/** 同时适用多个分区组合的大分区，注意把极地分区合并成一个小分区 */
+export type GISZoneMap = Record<GISZoneKey, GISZone>;
+
+/** 代表当前可显示的分区，可能有一个或多个 */
+export type GISZones = Map<GISZoneKey, GISZone>;
+
+/** 在分区内的格子索引 key = JSON.stringify(GISZone) */
+export type GISZoneTileIndicesMap = Map<GISZoneKey, number[]>;
+
+/** 储存多边形面数，由于有可能这个区域会包含五边形
+ * 单个格子可能会有3个或则4个面，导致faceindex和tileindex
+ * 映射出问题
+ * key = JSON.stringify(GISZone)
+ */
+export type GISZoneFacesMap = Map<GISZoneKey, number[]>;
+
+/** 映射每个分区的合并边界 */
+export type GISZoneBordersMap = Map<GISZoneKey, LineSegments>;
