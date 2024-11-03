@@ -61,12 +61,15 @@ export class SphereOrbitControls extends Controls<EventMap> {
     minTargetRadius = 0;
     maxTargetRadius = Infinity;
 
+    // 旋转时 phi的限制
     minPolarAngle = 0;
     maxPolarAngle = Math.PI;
 
+    // 旋转时 theta 的限制
     minAzimuthAngle = -Infinity;
     maxAzimuthAngle = Infinity;
 
+    // 阻尼衰减
     enableDamping = false;
     dampingFactor = 0.05;
 
@@ -78,6 +81,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
 
     enablePan = true;
     panSpeed = 1.0;
+
     screenSpacePanning = true;
 
     keyPanSpeed = 7.0;
@@ -106,6 +110,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
     // 取逆，同一个轴按相反方向旋转同一个角度
     _quatInverse: Quaternion;
 
+    /** 以target为球心，相机位置位于球面的球坐标 */
     _spherical = new Spherical();
     _sphericalDelta = new Spherical();
 
@@ -121,11 +126,13 @@ export class SphereOrbitControls extends Controls<EventMap> {
     _panEnd = new Vector2();
     _panDelta = new Vector2();
 
+    // 像素坐标
     _dollyStart = new Vector2();
     _dollyEnd = new Vector2();
     _dollyDelta = new Vector2();
     _dollyDirection = new Vector3();
 
+    /** 存储当前鼠标的 ndc 坐标 */
     _mouse = new Vector2();
 
     _performCursorZoom = false;
@@ -146,10 +153,10 @@ export class SphereOrbitControls extends Controls<EventMap> {
         this.position0 = this.object.position.clone();
         this.zoom0 = this.object.zoom;
 
-        // 始终保持 Y+ 是相机的上方
+        // 纠正相机形态，始终保持 Y+ 是相机的上方
         this._quat = new Quaternion().setFromUnitVectors(object.up, new Vector3(0, 1, 0));
 
-        // 求逆，相反旋转
+        // 求逆，代表相反旋转
         this._quatInverse = this._quat.clone().invert();
 
         this.onPointerDown = this.onPointerDown.bind(this);
@@ -169,7 +176,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
         this.update();
     }
 
-    onnect() {
+    connect() {
         this.domElement.addEventListener("pointerdown", this.onPointerDown);
         this.domElement.addEventListener("pointercancel", this.onPointerUp);
 
@@ -239,6 +246,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
                 this.state = CONTROL_STATE.DOLLY;
                 break;
 
+            // rotate 和 pan 按住 ctrl or meta or shift 可以切换操作
             case MOUSE.ROTATE:
                 if (event.ctrlKey || event.metaKey || event.shiftKey) {
                     if (this.enablePan === false) return;
@@ -560,12 +568,18 @@ export class SphereOrbitControls extends Controls<EventMap> {
         }
     }
 
+    /** 基于鼠标滑动的差值计算一个合适的缩放值
+     * 返回的值 < 1
+     * 减函数，差值越大，返回的值越小
+     */
     _getZoomScale(delta: number) {
         const normalizedDelta = Math.abs(delta * 0.01);
+        // 这个指数函数是减函数，返回的值 < 1
         return Math.pow(0.95, this.zoomSpeed * normalizedDelta);
     }
 
     _rotateLeft(angle: number) {
+        // 物体视觉上逆时针旋转，那么相机需要顺时针旋转
         this._sphericalDelta.theta -= angle;
     }
 
@@ -603,10 +617,11 @@ export class SphereOrbitControls extends Controls<EventMap> {
             _v.copy(position).sub(this.target);
             let targetDistance = _v.length();
 
-            // half of the fov is center to top of screen
+            // 屏幕上到下是整个视锥的fov范围，那屏幕中间到上下的角度就是 fov / 2
             targetDistance *= Math.tan(((this.object.fov / 2) * Math.PI) / 180.0);
 
-            // we use only clientHeight here so aspect ratio does not distort speed
+            // 按比例计算世界空间下该移动的距离
+            // 都使用 clientHeight，是为了避免宽高比的影响
             this._panLeft((2 * deltaX * targetDistance) / element.clientHeight, this.object.matrix);
             this._panUp((2 * deltaY * targetDistance) / element.clientHeight, this.object.matrix);
         } else if (this.object instanceof OrthographicCamera) {
@@ -644,6 +659,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
         }
     }
 
+    /** 更新基于鼠标位置缩放的参数，主要是鼠标的ndc坐标和缩放方向 */
     _updateZoomParameters(x: number, y: number) {
         if (!this.zoomToCursor) {
             return;
@@ -667,6 +683,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
             .normalize();
     }
 
+    /** 限制到最大最小距离范围内 */
     _clampDistance(dist: number) {
         return Math.max(this.minDistance, Math.min(this.maxDistance, dist));
     }
@@ -681,6 +698,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
 
     _handleMouseDownDolly(event: MouseEvent) {
         this._updateZoomParameters(event.clientX, event.clientX);
+        // 记下缩放像素起始位置
         this._dollyStart.set(event.clientX, event.clientY);
     }
 
@@ -694,7 +712,8 @@ export class SphereOrbitControls extends Controls<EventMap> {
         this._rotateDelta.subVectors(this._rotateEnd, this._rotateStart).multiplyScalar(this.rotateSpeed);
 
         const element = this.domElement;
-
+   
+        // 按照比例计算这个差值该旋转多少角度
         this._rotateLeft((_twoPI * this._rotateDelta.x) / element.clientHeight); // yes, height
 
         this._rotateUp((_twoPI * this._rotateDelta.y) / element.clientHeight);
@@ -709,9 +728,12 @@ export class SphereOrbitControls extends Controls<EventMap> {
 
         this._dollyDelta.subVectors(this._dollyEnd, this._dollyStart);
 
+        // 根据鼠标向上还是向下决定缩放方向
         if (this._dollyDelta.y > 0) {
+            // 鼠标下滑
             this._dollyOut(this._getZoomScale(this._dollyDelta.y));
         } else if (this._dollyDelta.y < 0) {
+            // 鼠标上滑
             this._dollyIn(this._getZoomScale(this._dollyDelta.y));
         }
 
