@@ -20,7 +20,7 @@ const _TILT_LIMIT = Math.cos(70 * MathUtils.DEG2RAD);
 const _v = new Vector3();
 const _twoPI = 2 * Math.PI;
 
-enum CONTROL_STATE {
+export enum CONTROL_STATE {
     NONE = -1,
     ROTATE = 0,
     DOLLY = 1,
@@ -41,7 +41,7 @@ const _changeEvent: ControlEventType = { type: "change" };
 const _startEvent: ControlEventType = { type: "start" };
 const _endEvent: ControlEventType = { type: "end" };
 
-export class SphereOrbitControlsBack extends Controls<EventMap> {
+export class SphereOrbitControls extends Controls<EventMap> {
     /** 控件状态 */
     state = CONTROL_STATE.NONE;
     eanbled = true;
@@ -118,6 +118,17 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
     _spherical = new Spherical();
     _sphericalDelta = new Spherical();
 
+    /** 用于球面平移记录target位置 */
+    _sphericalPan = new Spherical();
+    _sphericalPanDelta = new Spherical();
+
+    _isTiltZoom = false;
+    /** 相机倾斜phi */
+    _tiltZoomAngle = 0;
+    /** 相对于垂直地面的相机倾斜，比 _tiltZoomAngle 小点*/
+    _tiltOrthAngle = 0;
+    _tiltMaxAngle = Math.PI / 3;
+
     _scale = 1;
 
     _panOffset = new Vector3();
@@ -150,7 +161,7 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
     declare object: PerspectiveCamera | OrthographicCamera;
     declare domElement: HTMLCanvasElement;
 
-    constructor(object: PerspectiveCamera | OrthographicCamera, domElement: HTMLCanvasElement) {
+    constructor(object: PerspectiveCamera | OrthographicCamera, domElement: HTMLCanvasElement, config?: {}) {
         super(object, domElement);
 
         // 用于重置状态
@@ -387,6 +398,9 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
         // angle from z-axis around y-axis
         this._spherical.setFromVector3(_v);
 
+        // 记录sphere 平移时的target
+        this._sphericalPan.setFromVector3(this.target.clone());
+
         if (this.autoRotate && this.state === CONTROL_STATE.NONE) {
             this._rotateLeft(this._getAutoRotationAngle(deltaTime));
         }
@@ -397,6 +411,9 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
         } else {
             this._spherical.theta += this._sphericalDelta.theta;
             this._spherical.phi += this._sphericalDelta.phi;
+
+            this._sphericalPan.theta += this._sphericalPanDelta.theta;
+            this._sphericalPan.phi += this._sphericalPanDelta.phi;
         }
 
         // 限制theta角度
@@ -428,6 +445,8 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
         // 限制 phi 到 0 ~ pi
         this._spherical.makeSafe();
 
+        this._sphericalPan.makeSafe();
+
         // pan 移动target
         if (this.enableDamping === true) {
             this.target.addScaledVector(this._panOffset, this.dampingFactor);
@@ -440,6 +459,10 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
         this.target.sub(this.cursor);
         this.target.clampLength(this.minTargetRadius, this.maxTargetRadius);
         this.target.add(this.cursor);
+
+        if (this.enableZoom && this._isTiltZoom) {
+            this._spherical.phi = this._tiltZoomAngle;
+        }
 
         let zoomChanged = false;
         // adjust the camera position based on zoom only if we're not zooming to the cursor or if it's an ortho camera
@@ -459,6 +482,24 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
 
         position.copy(this.target).add(_v);
 
+        // 球面平移
+        if (this.enablePan && this.state === CONTROL_STATE.PAN) {
+            this.target.setFromSpherical(this._sphericalPan)
+            const old = this.target.clone();
+            const length = old.distanceTo(position);
+
+            const yp = new Vector3(0, 1, 0);
+            const angle = old.angleTo(yp);
+            const yn = new Vector3(0, 1, 0).multiplyScalar(old.length() / Math.cos(angle));
+            const orth = old.clone().cross(yn).normalize();
+
+            const tCamera = old.clone().sub(yn).normalize().multiplyScalar(length);
+            // 在旋转个角度
+            const quaternion = new Quaternion().setFromAxisAngle(orth, Math.PI / 2 - this._tiltOrthAngle);
+            tCamera.applyQuaternion(quaternion);
+            position.copy(old.add(tCamera))
+        }
+
         this.object.lookAt(this.target);
 
         if (this.enableDamping === true) {
@@ -470,6 +511,8 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
             this._sphericalDelta.set(0, 0, 0);
 
             this._panOffset.set(0, 0, 0);
+
+            this._sphericalPanDelta.set(0, 0, 0);
         }
 
         // adjust camera position
@@ -606,6 +649,10 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
         this._panOffset.add(_v);
     }
 
+    _panSphereLeft(angle: number) {
+        this._sphericalPanDelta.theta -= angle;
+    }
+
     _panUp(distance: number, objectMatrix: Matrix4) {
         if (this.screenSpacePanning === true) {
             _v.setFromMatrixColumn(objectMatrix, 1);
@@ -619,23 +666,18 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
         this._panOffset.add(_v);
     }
 
+    _panSphereUp(angle: number) {
+        this._sphericalPanDelta.phi -= angle;
+    }
+
     // deltaX and deltaY are in pixels; right and down are positive
     _pan(deltaX: number, deltaY: number) {
         const element = this.domElement;
 
         if (this.object instanceof PerspectiveCamera) {
-            // perspective
-            const position = this.object.position;
-            _v.copy(position).sub(this.target);
-            let targetDistance = _v.length();
-
-            // 屏幕上到下是整个视锥的fov范围，那屏幕中间到上下的角度就是 fov / 2
-            targetDistance *= Math.tan(((this.object.fov / 2) * Math.PI) / 180.0);
-
-            // 按比例计算世界空间下该移动的距离
-            // 都使用 clientHeight，是为了避免宽高比的影响
-            this._panLeft((2 * deltaX * targetDistance) / element.clientHeight, this.object.matrix);
-            this._panUp((2 * deltaY * targetDistance) / element.clientHeight, this.object.matrix);
+            // 走球面平移
+            this._panSphereLeft((_twoPI * deltaX) / element.clientHeight);
+            this._panSphereUp((_twoPI * deltaY) / element.clientHeight);
         } else if (this.object instanceof OrthographicCamera) {
             // orthographic
             this._panLeft(
@@ -727,7 +769,7 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
         this._rotateDelta.subVectors(this._rotateEnd, this._rotateStart).multiplyScalar(this.rotateSpeed);
 
         const element = this.domElement;
-   
+
         // 按照比例计算这个差值该旋转多少角度
         this._rotateLeft((_twoPI * this._rotateDelta.x) / element.clientHeight); // yes, height
 
@@ -888,5 +930,23 @@ export class SphereOrbitControlsBack extends Controls<EventMap> {
         }
 
         return newEvent;
+    }
+
+    /**
+     * @param angle 相机和地面垂直轴的夹角
+     */
+    setCameraAngle(angle: number) {
+        const n = this.target.clone().normalize();
+        const a = n.angleTo(new Vector3(0, 1, 0));
+        this._tiltZoomAngle = angle + a;
+        this._tiltOrthAngle = angle;
+    }
+
+    setIsTiltZoom(tileZoom: boolean) {
+        this._isTiltZoom = tileZoom;
+    }
+
+    setMaxCameraAngle(angle: number) {
+        this._tiltMaxAngle = angle;
     }
 }

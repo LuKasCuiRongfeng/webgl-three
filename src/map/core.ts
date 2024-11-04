@@ -26,6 +26,7 @@ import ThreeManager, {
     TWEEN,
     Uniform,
     Vector3,
+    SphereOrbitControls,
 } from "./three-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getBytesUtils, sleep } from "./utils";
@@ -61,6 +62,7 @@ import { Coordinate, GISZone, GISZoneMap, GISZoneTileIndicesMap, MapInitStatus, 
 import fragment from "./frag.glsl";
 import vertex from "./vert.glsl";
 import { debounce, isEqual } from "lodash-es";
+import { CONTROL_STATE } from "./sphereOrbit";
 
 /** 操作地图数据的对象 */
 let mapBytesUtils: MapBytesUtils = null;
@@ -192,11 +194,11 @@ export async function initMap() {
 
     registerCanvasEvent(manager.getRenderer().domElement);
 
-    await preprocessInstanceTiles();
+    // await preprocessInstanceTiles();
 
-    // await preprocessTiles();
+    await preprocessTiles();
 
-    // await drawLayer();
+    await drawLayer();
 
     await drawVirtualZone();
 
@@ -231,36 +233,75 @@ function initCamera() {
 function cameraControlChanging() {
     controlChanging = true;
     needsUpdateWhenControlChanging();
+
+    setTiltAngle();
+}
+
+function setTiltAngle() {
+    const controls = getOrbitControls();
+    const minDis = ZOOM_DIS.get(EDIT_ZOOM);
+    const pos = manager.camera.position;
+    const dis = pos.length() - earthRadius;
+    console.log("zoom", minDis, dis)
+
+    if (dis < minDis) {
+        if (!isLowHeight) {
+            console.log("进入辣妹儿")
+            controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS
+            controls.target.copy(pos.clone().normalize().multiplyScalar(earthRadius));
+            controls.setIsTiltZoom(true);
+            controls.enablePan = true;
+            controls.enableRotate = false;
+            isLowHeight = true;
+            controls.update()
+        }
+
+        const angle =
+            controls._tiltMaxAngle * (1 - (dis - CAMEARA_TO_EARTH_MIN_DIS) / (minDis - CAMEARA_TO_EARTH_MIN_DIS));
+
+        controls.setCameraAngle(angle);
+        // controls.update();
+    } else {
+        if (isLowHeight) {
+            console.log("恢复")
+            controls.target.copy(new Vector3(0, 0, 0));
+            controls.setIsTiltZoom(false);
+            controls.enablePan = false;
+            controls.enableRotate = true;
+            isLowHeight = false
+            controls.update()
+        }
+    }
 }
 
 function cameraControlChanged() {
     controlChanging = false;
     needsUpdateAfterControlChanged();
 
-    const controls = getOrbitControls();
-    if (zoom >= EDIT_ZOOM && !isLowHeight) {
-        const pos = manager.camera.position;
-        // 修改target
-        controls.target.copy(pos.clone().normalize().multiplyScalar(earthRadius));
-        controls.enablePan = true;
-        controls.minPolarAngle = Math.PI / 2;
-        // controls.minAzimuthAngle = 0
-        // controls.maxAzimuthAngle = 0;
-        controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS;
-        controls.rotateSpeed = 1;
-        controls.zoomSpeed = 1;
-        controls.update();
-        isLowHeight = true;
-    } else if (zoom < EDIT_ZOOM && isLowHeight) {
-        controls.target.copy(new Vector3(0, 0, 0));
-        controls.enablePan = false;
-        controls.minPolarAngle = 0;
-        controls.minAzimuthAngle = Infinity;
-        controls.maxAzimuthAngle = Infinity;
-        controls.minDistance = earthRadius + CAMEARA_TO_EARTH_MIN_DIS;
-        controls.update();
-        isLowHeight = false;
-    }
+    // const controls = getOrbitControls();
+    // if (zoom >= EDIT_ZOOM && !isLowHeight) {
+    //     const pos = manager.camera.position;
+    //     // 修改target
+    //     controls.target.copy(pos.clone().normalize().multiplyScalar(earthRadius));
+    //     controls.enablePan = true;
+    //     controls.minPolarAngle = Math.PI / 2;
+    //     // controls.minAzimuthAngle = 0
+    //     // controls.maxAzimuthAngle = 0;
+    //     controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS;
+    //     controls.rotateSpeed = 1;
+    //     controls.zoomSpeed = 1;
+    //     controls.update();
+    //     isLowHeight = true;
+    // } else if (zoom < EDIT_ZOOM && isLowHeight) {
+    //     controls.target.copy(new Vector3(0, 0, 0));
+    //     controls.enablePan = false;
+    //     controls.minPolarAngle = 0;
+    //     controls.minAzimuthAngle = Infinity;
+    //     controls.maxAzimuthAngle = Infinity;
+    //     controls.minDistance = earthRadius + CAMEARA_TO_EARTH_MIN_DIS;
+    //     controls.update();
+    //     isLowHeight = false;
+    // }
 }
 
 /** 一些需要 在相机控制器改变时的操作放这里 */
@@ -416,7 +457,7 @@ async function preprocessInstanceTiles() {
 
         if (!first5Geometry && corners.length === 5) {
             first5Geometry = new InstancedBufferGeometry();
-            first5Geometry.instanceCount = 12
+            first5Geometry.instanceCount = 12;
             first5Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
 
             // first5Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
@@ -444,7 +485,7 @@ async function preprocessInstanceTiles() {
 
         if (!first6Geometry && corners.length === 6) {
             first6Geometry = new InstancedBufferGeometry();
-            first6Geometry.instanceCount = tilesCount - 12
+            first6Geometry.instanceCount = tilesCount - 12;
             first6Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
 
             // first6Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
@@ -492,7 +533,7 @@ async function preprocessInstanceTiles() {
 
     const f = new Vector3(0, 0, 1);
 
-    console.log(first5Geometry, first6Geometry)
+    console.log(first5Geometry, first6Geometry);
 
     if (first5Geometry && first6Geometry) {
         for (let i = 0; i < 500; i++) {
@@ -682,7 +723,7 @@ export function createTileGeometry(op: {
     const geometry = new BufferGeometry();
     const points: number[] = [];
     const colors: number[] = [];
-    const elevations: number[] = []
+    const elevations: number[] = [];
 
     const { vertices, color, elevation } = op;
 
@@ -692,7 +733,7 @@ export function createTileGeometry(op: {
         const { x, y, z } = v;
         points.push(x, y, z);
         colors.push(...color);
-        elevations.push(elevation)
+        elevations.push(elevation);
     });
 
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
@@ -1056,7 +1097,6 @@ export function isClickCanvas() {
  */
 export async function setZones(zones: GISZoneMap, pos?: Vector3) {
     if (zoom < EDIT_ZOOM) {
-        globalMesh.visible = true;
         beforeZonesChange();
 
         if (zones && Object.keys(zones).length > 0) {
@@ -1067,8 +1107,6 @@ export async function setZones(zones: GISZoneMap, pos?: Vector3) {
         gisZones = null;
         return;
     }
-
-    globalMesh.visible = false;
 
     if (!zones || Object.keys(zones).length === 0) return;
 

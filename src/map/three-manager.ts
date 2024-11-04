@@ -109,6 +109,8 @@ import { ImprovedNoise } from "three/examples/jsm/math/ImprovedNoise.js";
 import Stats from "three/addons/libs/stats.module.js"
 
 import CustomShaderMaterial from "three-custom-shader-material/vanilla"
+
+import { SphereOrbitControls } from "./sphereOrbit";
 // ----------------------------------------------------
 // ----------------------------------------------------
 // ----------------------------------------------------
@@ -124,7 +126,7 @@ class ThreeManager {
     /** 只保留一个主视角相机 */
     private _camera: Camera;
     private clock: Clock;
-    private cameraOrbitControls: Map<number, OrbitControls> = new Map();
+    private cameraOrbitControls: Map<number, SphereOrbitControls> = new Map();
 
     private cameraDragControls: Map<number, DragControls> = new Map();
 
@@ -286,7 +288,8 @@ class ThreeManager {
     getOrbitControls(camera: Camera, domElement?: HTMLElement) {
         let controls = this.cameraOrbitControls.get(camera.id);
         if (controls == undefined) {
-            controls = new OrbitControls(camera, domElement);
+            // @ts-ignore
+            controls = new SphereOrbitControls(camera, domElement);
             // controls.zoomToCursor = true;
             this.cameraOrbitControls.set(camera.id, controls);
         }
@@ -703,5 +706,6 @@ export {
     Quaternion,
     Stats,
     Uniform,
-    Float32BufferAttribute
+    Float32BufferAttribute,
+    SphereOrbitControls
 };

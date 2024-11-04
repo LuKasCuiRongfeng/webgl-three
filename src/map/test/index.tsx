@@ -33,6 +33,8 @@ import vert from "./vert.glsl";
 import frag from "./frag.glsl";
 import { MeshPhongNodeMaterial } from "three/webgpu";
 
+import { SphereOrbitControlsBack } from "../orbit"
+
 const min_dis = 30;
 
 let low_height = false;
@@ -44,16 +46,16 @@ export default function Test() {
         const canvas = canvasRef.current;
         run();
 
-        canvas.addEventListener("pointerdown", (e) => {
-            canvas.setPointerCapture(e.pointerId)
-            console.log(e.pointerId, e.pointerType);
-        });
-        canvas.addEventListener("pointermove", (e) => {
-            console.log(e.pointerId, e.pointerType);
-        });
-        canvas.addEventListener("pointerup", (e) => {
-            console.log(e.pointerId, e.pointerType);
-        });
+        // canvas.addEventListener("pointerdown", (e) => {
+        //     canvas.setPointerCapture(e.pointerId)
+        //     console.log(e.pointerId, e.pointerType);
+        // });
+        // canvas.addEventListener("pointermove", (e) => {
+        //     console.log(e.pointerId, e.pointerType);
+        // });
+        // canvas.addEventListener("pointerup", (e) => {
+        //     console.log(e.pointerId, e.pointerType);
+        // });
     }, []);
 
     const run = () => {
@@ -63,10 +65,11 @@ export default function Test() {
 
         const camera = new PerspectiveCamera(75, 1.5, 0.1, 500);
         camera.position.set(0, 0, 50);
-        const controls = new OrbitControls(camera, canvas);
+        const controls = new SphereOrbitControlsBack(camera, canvas);
         controls.enableDamping = false;
+        controls.screenSpacePanning = false
         // controls.maxPolarAngle = Math.PI / 2;
-        controls.enablePan = false;
+        // controls.enablePan = false;
 
         const light = new DirectionalLight(0xffffff, 1);
         light.position.set(20, 20, 20);
@@ -81,19 +84,33 @@ export default function Test() {
         box.add(axis.clone());
         box.translateX(10);
 
-        setTimeout(() => {
-            const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4);
-            box.quaternion.copy(q);
+        const sphere = new Mesh(new IcosahedronGeometry(10), new MeshPhongMaterial({ color: 0xff0000 }))
+        scene.add(sphere)
 
-            camera.rotateX(Math.PI / 5);
+        // controls.target.set(0, 10, 0)
+        controls.minPolarAngle = 0
+        controls.maxPolarAngle = Math.PI / 2
+        controls.minAzimuthAngle = 0
+        controls.maxAzimuthAngle = 0
+        controls.update()
 
-            console.log(camera.up);
+        controls.addEventListener("end", () => {
+            console.log(controls.target.toArray())
+        })
 
-            setTimeout(() => {
-                const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4);
-                box.quaternion.copy(q.invert());
-            }, 2000);
-        }, 2000);
+        // setTimeout(() => {
+        //     const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4);
+        //     box.quaternion.copy(q);
+
+        //     camera.rotateX(Math.PI / 5);
+
+        //     console.log(camera.up);
+
+        //     setTimeout(() => {
+        //         const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4);
+        //         box.quaternion.copy(q.invert());
+        //     }, 2000);
+        // }, 2000);
 
         // const radius = 15;
         // controls.minDistance = radius + 1;
