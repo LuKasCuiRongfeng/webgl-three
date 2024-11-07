@@ -97,7 +97,11 @@ export class SphereOrbitControls extends Controls<EventMap> {
 
     keys = { LEFT: "ArrowLeft", UP: "ArrowUp", RIGHT: "ArrowRight", BOTTOM: "ArrowDown" };
 
-    mouseButtons = { LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN };
+    mouseButtons: Partial<{ LEFT: MOUSE; MIDDLE: MOUSE; RIGHT: MOUSE }> = {
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.DOLLY,
+        RIGHT: MOUSE.PAN,
+    };
 
     // 用于重置状态
     target0: Vector3;
@@ -124,10 +128,11 @@ export class SphereOrbitControls extends Controls<EventMap> {
 
     _isTiltZoom = false;
     /** 相机倾斜phi */
-    _tiltZoomAngle = 0;
-    /** 相对于垂直地面的相机倾斜，比 _tiltZoomAngle 小点*/
+    _tiltPhiAngle = 0;
+    /** 相机垂直地面的倾角*/
     _tiltOrthAngle = 0;
-    _tiltMaxAngle = Math.PI / 3;
+    /** 相机垂直地面的最大倾角*/
+    _tiltMaxAngle = Math.PI / 4;
 
     _scale = 1;
 
@@ -461,7 +466,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
         this.target.add(this.cursor);
 
         if (this.enableZoom && this._isTiltZoom) {
-            this._spherical.phi = this._tiltZoomAngle;
+            this._spherical.phi = this._tiltPhiAngle;
         }
 
         let zoomChanged = false;
@@ -484,20 +489,31 @@ export class SphereOrbitControls extends Controls<EventMap> {
 
         // 球面平移
         if (this.enablePan && this.state === CONTROL_STATE.PAN) {
-            this.target.setFromSpherical(this._sphericalPan)
-            const old = this.target.clone();
-            const length = old.distanceTo(position);
+            const length = this.target.distanceTo(position);
+            this.target.setFromSpherical(this._sphericalPan);
+            const nt = this.target.clone();
 
             const yp = new Vector3(0, 1, 0);
-            const angle = old.angleTo(yp);
-            const yn = new Vector3(0, 1, 0).multiplyScalar(old.length() / Math.cos(angle));
-            const orth = old.clone().cross(yn).normalize();
+            const angle = nt.angleTo(yp);
 
-            const tCamera = old.clone().sub(yn).normalize().multiplyScalar(length);
+            const yn = new Vector3(0, 1, 0).multiplyScalar(nt.length() / Math.cos(angle));
+            // angle 如果小于 pi/2，则位于北半球，orth方向垂直向外
+            // 如果大于 pi/2，则位于南半球，orth方向垂直向内
+            const orth = nt.clone().cross(yn).normalize();
+
+            const tCamera = nt.clone().sub(yn).normalize().multiplyScalar(length);
+            const dir = nt.y >= 0 ? 1 : -1;
             // 在旋转个角度
-            const quaternion = new Quaternion().setFromAxisAngle(orth, Math.PI / 2 - this._tiltOrthAngle);
+            const quaternion = new Quaternion().setFromAxisAngle(
+                orth.multiplyScalar(dir),
+                Math.PI / 2 - this._tiltOrthAngle
+            );
             tCamera.applyQuaternion(quaternion);
-            position.copy(old.add(tCamera))
+            if (dir === 1) {
+                position.copy(nt.add(tCamera));
+            } else {
+                position.copy(nt.sub(tCamera));
+            }
         }
 
         this.object.lookAt(this.target);
@@ -713,6 +729,16 @@ export class SphereOrbitControls extends Controls<EventMap> {
         }
     }
 
+    _getNdcByPixel(x: number, y: number, z = 1) {
+        const rect = this.domElement.getBoundingClientRect();
+        const dx = x - rect.left;
+        const dy = y - rect.top;
+        const w = rect.width;
+        const h = rect.height;
+
+        return new Vector3((dx / w) * 2 - 1, -(dy / h) * 2 + 1, z)
+    }
+
     /** 更新基于鼠标位置缩放的参数，主要是鼠标的ndc坐标和缩放方向 */
     _updateZoomParameters(x: number, y: number) {
         if (!this.zoomToCursor) {
@@ -802,6 +828,9 @@ export class SphereOrbitControls extends Controls<EventMap> {
     _handleMouseMovePan(event: MouseEvent) {
         this._panEnd.set(event.clientX, event.clientY);
 
+        // 直接把 panSpeed = 1，根据像素计算该pan多少角度
+        const start = this._getNdcByPixel(this._panStart.x, this._panStart.y)
+        const end = this._getNdcByPixel(this._panEnd.x, this._panEnd.y)
         this._panDelta.subVectors(this._panEnd, this._panStart).multiplyScalar(this.panSpeed);
 
         this._pan(this._panDelta.x, this._panDelta.y);
@@ -937,8 +966,10 @@ export class SphereOrbitControls extends Controls<EventMap> {
      */
     setCameraAngle(angle: number) {
         const n = this.target.clone().normalize();
+        // 在北半球 0< a < PI/2
+        // 在南半球 pi/2 < a < pi
         const a = n.angleTo(new Vector3(0, 1, 0));
-        this._tiltZoomAngle = angle + a;
+        this._tiltPhiAngle = angle + a;
         this._tiltOrthAngle = angle;
     }
 

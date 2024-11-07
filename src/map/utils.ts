@@ -58,3 +58,20 @@ async function readFileBytes(path: string) {
     const bytes = await readFile(path);
     return bytes.buffer;
 }
+
+export async function readFileBase64() {
+    const path = await open({
+        multiple: false,
+        filters: [{ name: "选择纹理图片集", extensions: ["img", "png", "jpeg"] }],
+    });
+    if (!path) return;
+
+    const isExist = await exists(path);
+    if (!isExist) return;
+
+    const bytes = await readFile(path);
+    const nums = Array.from(bytes)
+    const str = btoa(String.fromCharCode.apply(null, nums))
+
+    return str
+}

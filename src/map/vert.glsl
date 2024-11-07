@@ -1,9 +1,12 @@
 attribute float elevation;
-
-#include ./includes/simplex_noise4.glsl
+attribute float colorMix;
+varying float vColorMix;
+varying vec2 vUV;
 
 void main() {
-    // float elevation = snoise(vec4(csm_Position, 0.0)) * 200.;
+    csm_Position += elevation * normal;
 
-    // csm_Position += elevation * normal;
+    vColorMix = colorMix;
+
+    vUV = uv;
 }

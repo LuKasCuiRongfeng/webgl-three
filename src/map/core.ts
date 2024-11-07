@@ -27,14 +27,18 @@ import ThreeManager, {
     Uniform,
     Vector3,
     SphereOrbitControls,
+    Texture,
+    SRGBColorSpace,
+    MOUSE,
 } from "./three-manager";
 import { open } from "@tauri-apps/plugin-dialog";
-import { getBytesUtils, sleep } from "./utils";
+import { getBytesUtils, readFileBase64, sleep } from "./utils";
 import { LL2TID } from "./LL2TID";
 import {
     CAMEARA_TO_EARTH_INIT_DIS,
     CAMEARA_TO_EARTH_MAX_DIS,
     CAMEARA_TO_EARTH_MIN_DIS,
+    DEFAULT_TERRIAN,
     EARTH_COLOR,
     EDIT_ZOOM,
     HEIGHT_SEGMENTS,
@@ -51,17 +55,19 @@ import {
     MIN_ZOOM,
     TILE_LAND_ALPHA_COLOR,
     TILE_LAND_COLOR,
+    TILE_TEXTURE_ATLAS,
+    TILE_TEXTURE_MAP,
     WIDTH_SEGMENTS,
     ZONE_KEY_POLAR_N,
     ZONE_KEY_POLAR_S,
     ZOOM_DIS,
     ZOOM_SPEED,
 } from "./consts";
-import { Coordinate, GISZone, GISZoneMap, GISZoneTileIndicesMap, MapInitStatus, XColor } from "./types";
+import { Coordinate, GISZone, GISZoneMap, GISZoneTileIndicesMap, MapInitStatus, UV, XColor } from "./types";
 
 import fragment from "./frag.glsl";
 import vertex from "./vert.glsl";
-import { debounce, isEqual } from "lodash-es";
+import { debounce, isEqual, throttle } from "lodash-es";
 import { CONTROL_STATE } from "./sphereOrbit";
 
 /** 操作地图数据的对象 */
@@ -117,6 +123,8 @@ let curTileIndices: number[] = null;
 
 let curTileLayer: Mesh = null;
 
+let lastCurTileLayer: Mesh = null;
+
 /** 分区格子边界 */
 let curTileEdge: LineSegments = null;
 
@@ -125,6 +133,9 @@ const TileVertexIndexMap: Map<number, number[]> = new Map();
 
 /** 所有 faceIndex -> tileIndex */
 const faceTileIndexMap: Map<number, number> = new Map();
+
+/** tileindex -> uv[] */
+const tileIndexUVMap: Map<number, number[]> = new Map();
 
 /** 地图初始化状态 */
 const mapInitStatus: MapInitStatus = { loadPercent: 0 };
@@ -146,6 +157,8 @@ let controlChanging = false;
 let globalMesh: Mesh = null;
 
 let isLowHeight = false;
+
+let globalTexture: Texture = null;
 
 export async function initMap() {
     if (haveInitialed) {
@@ -225,6 +238,10 @@ function initCamera() {
     control.maxDistance = radius + CAMEARA_TO_EARTH_MAX_DIS;
     control.minDistance = radius + CAMEARA_TO_EARTH_MIN_DIS;
 
+    control.mouseButtons = {
+        LEFT: MOUSE.ROTATE,
+    };
+
     setControl(false);
 
     registerControlEvent();
@@ -242,18 +259,19 @@ function setTiltAngle() {
     const minDis = ZOOM_DIS.get(EDIT_ZOOM);
     const pos = manager.camera.position;
     const dis = pos.length() - earthRadius;
-    console.log("zoom", minDis, dis)
 
     if (dis < minDis) {
         if (!isLowHeight) {
-            console.log("进入辣妹儿")
-            controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS
+            controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS;
             controls.target.copy(pos.clone().normalize().multiplyScalar(earthRadius));
             controls.setIsTiltZoom(true);
             controls.enablePan = true;
             controls.enableRotate = false;
+            controls.mouseButtons = {
+                LEFT: MOUSE.PAN,
+            };
             isLowHeight = true;
-            controls.update()
+            controls.update();
         }
 
         const angle =
@@ -263,13 +281,15 @@ function setTiltAngle() {
         // controls.update();
     } else {
         if (isLowHeight) {
-            console.log("恢复")
             controls.target.copy(new Vector3(0, 0, 0));
             controls.setIsTiltZoom(false);
             controls.enablePan = false;
             controls.enableRotate = true;
-            isLowHeight = false
-            controls.update()
+            controls.mouseButtons = {
+                LEFT: MOUSE.ROTATE,
+            };
+            isLowHeight = false;
+            controls.update();
         }
     }
 }
@@ -320,7 +340,7 @@ function registerControlEvent() {
 
     control.addEventListener("change", cameraControlChanging);
 
-    control.addEventListener("end", debounce(cameraControlChanged, 500, { trailing: true }));
+    control.addEventListener("end", throttle(cameraControlChanged, 100, { trailing: true }));
 }
 
 /** 获取经纬度转 tileindex 工具 */
@@ -533,8 +553,6 @@ async function preprocessInstanceTiles() {
 
     const f = new Vector3(0, 0, 1);
 
-    console.log(first5Geometry, first6Geometry);
-
     if (first5Geometry && first6Geometry) {
         for (let i = 0; i < 500; i++) {
             const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
@@ -581,19 +599,65 @@ async function drawLayer() {
     const { tilesCount, radius } = meshBytesUtils.getHeader();
     const geometryArray: BufferGeometry[] = [];
 
+    let tid = 0;
+
+    // 先生成材质复用
+    const image = new Image();
+    let src = await readFileBase64();
+    src = `data:image/png;base64,${src}`;
+    image.src = src;
+
+    const texture = new Texture(image);
+    texture.colorSpace = SRGBColorSpace;
+    image.onload = () => (texture.needsUpdate = true);
+
+    globalTexture = texture;
+
     for (let index = 0; index < tilesCount; index++) {
         const { corners, x, y, z } = meshBytesUtils.getTileByIndex(index);
         const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(index);
         const isLand = elevation > waterElevation;
 
+        if (elevation < -waterElevation) {
+            tid = 40;
+        } else {
+            tid = type;
+        }
+
+        const cv = new Vector3(x, y, -z);
+        const n = calcVertexPositiveDir(cv, radius);
+
+        const uvSpan = getTextureUVSpan(tid);
+        const { leftU, bottomV, deltaU, deltaV } = uvSpan;
+
+        const centerU = leftU + deltaU / 2;
+        const centerV = bottomV + deltaV / 2;
+
+        const uvs: number[] = [];
+
         const vertices = corners.map<Coordinate>((v) => {
-            const corner = meshBytesUtils.getCornerByIndex(v);
+            const { x, y, z } = meshBytesUtils.getCornerByIndex(v);
+            const uv = calcVertexUV([leftU, bottomV], deltaU, deltaV, new Vector3(x, y, -z), cv, n);
+            uvs.push(...uv);
             return {
-                x: corner.x,
-                y: corner.y,
-                z: -corner.z,
+                x,
+                y,
+                z: -z,
             };
         });
+
+        const lerpUV: number[] = [];
+        // 插值 uv
+        for (let i = 0; i < uvs.length; i += 2) {
+            const u = uvs[i];
+            const v = uvs[i + 1];
+            lerpUV.push((centerU + u) / 2, (centerV + v) / 2);
+        }
+        lerpUV.push(centerU, centerV);
+
+        uvs.push(...lerpUV);
+
+        tileIndexUVMap.set(index, uvs);
 
         const color = randomColor();
 
@@ -602,6 +666,7 @@ async function drawLayer() {
             tileIndex: index,
             color,
             elevation,
+            waterElevation,
         });
 
         geometryArray.push(geometry);
@@ -678,19 +743,28 @@ async function drawLayer() {
         // color: 0xff0000,
         // wireframe: true,
         vertexShader: /* glsl */ `
-            attribute float elevation;
-            varying float vElevation;
+            attribute float colorMix;
+            varying float vColorMix;
 
             void main() {
-                csm_Position += elevation * normal;
-
-                vElevation = elevation;
+                vColorMix = colorMix;
             }
         `,
         fragmentShader: /* glsl */ `
-            varying float vElevation;
+            varying float vColorMix;
             void main() {
-                csm_DiffuseColor = vec4(vec3(vElevation), 1.0);
+                vec3 color = vec3(0., 0., 1.);
+                float mix1 = smoothstep(-2.0, 0.1, vColorMix);
+                color = mix(color, vec3(0., 1., 0.), mix1);
+                float mix0 = step(2.1, vColorMix);
+                color = mix(color, vec3(0., 1.0, 0.5), mix0);
+                float mix2 = step(6.1, vColorMix);
+                color = mix(color, vec3(1., 1., 0.), mix2);
+                float mix3 = step(12.1, vColorMix);
+                color = mix(color, vec3(0.9), mix3);
+                float mix4 = step(18.1, vColorMix);
+                color = mix(color, vec3(1.0), mix4);
+                csm_DiffuseColor = vec4(color, 1.0);
             }
         `,
     });
@@ -718,27 +792,28 @@ export function createTileGeometry(op: {
     vertices: Coordinate[];
     tileIndex?: number;
     color?: XColor;
-    elevation?: number;
+    elevation: number;
+    waterElevation: number;
 }) {
     const geometry = new BufferGeometry();
     const points: number[] = [];
     const colors: number[] = [];
-    const elevations: number[] = [];
+    const colorMix: number[] = [];
 
-    const { vertices, color, elevation } = op;
+    const { vertices, color, elevation, waterElevation } = op;
 
     const count = vertices.length;
 
     vertices.forEach((v) => {
         const { x, y, z } = v;
         points.push(x, y, z);
-        colors.push(...color);
-        elevations.push(elevation);
+        // colors.push(...color);
+        colorMix.push(elevation - waterElevation);
     });
 
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-    geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
-    geometry.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1));
+    // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+    geometry.setAttribute("colorMix", new BufferAttribute(new Float32Array(colorMix), 1));
 
     if (count === 6) {
         // 六边形顶点索引，注意在自动计算法向量时，采用的右手定则
@@ -764,13 +839,16 @@ export function createComplexTileGeometry(op: {
     tileIndex?: number;
     color?: XColor;
     elevation?: number;
+    waterElevation?: number;
+    type?: number;
 }) {
     const geometry = new BufferGeometry();
     const points: number[] = [];
-    const colors: number[] = [];
+    // const colors: number[] = [];
     const elevations: number[] = [];
+    const colorMix: number[] = [];
 
-    const { vertices, color, center, elevation } = op;
+    const { vertices, color, center, elevation, waterElevation, tileIndex } = op;
 
     const count = vertices.length;
 
@@ -780,9 +858,9 @@ export function createComplexTileGeometry(op: {
     for (let i = 0; i < count; i++) {
         const v = vertices[i];
         vertices.push({
-            // x: (v.x + x) / 2,
-            // y: (v.y + y) / 2,
-            // z: (v.z + z) / 2,
+            // x: mixValue(v.x, x, 0.5),
+            // y: mixValue(v.y, y, 0.5),
+            // z: mixValue(v.z, z, 0.5),
             x: v.x,
             y: v.y,
             z: v.z,
@@ -795,7 +873,8 @@ export function createComplexTileGeometry(op: {
     vertices.forEach((v, i) => {
         const { x, y, z } = v;
         points.push(x, y, z);
-        colors.push(...color);
+        // colors.push(...color);
+        colorMix.push(elevation - waterElevation);
 
         if (i < count) {
             elevations.push(0);
@@ -805,8 +884,10 @@ export function createComplexTileGeometry(op: {
     });
 
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-    geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+    // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
     geometry.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1));
+    geometry.setAttribute("colorMix", new BufferAttribute(new Float32Array(colorMix), 1));
+    geometry.setAttribute("uv", new Float32BufferAttribute(tileIndexUVMap.get(tileIndex), 2));
 
     if (count === 6) {
         // 正六边形再次细分为18个三角面
@@ -1043,7 +1124,13 @@ function setChangingControl() {
         control.zoomSpeed = speed * 3.6;
     } else if (isLowHeight) {
         control.rotateSpeed = 1;
-        control.zoomSpeed = 1;
+        control.zoomSpeed = 2;
+        control.panSpeed = 0.0005
+        // 靠近极地 0.5
+        // 靠近赤道 0.005
+        // const y = control.target.y;
+
+        // control.panSpeed = mixValue(0.5, 0.0005, 1 - Math.abs(y) / earthRadius);
     }
 }
 
@@ -1147,7 +1234,8 @@ async function afterZonesChange(zones: GISZoneMap) {
 /** 绘制分区 */
 async function drawZones(zones: GISZoneMap) {
     if (!zones) return;
-    removeZones();
+    // lastCurTileLayer = curTileLayer;
+    // removeZones();
     // 重新赋值
     gisZones = zones;
 
@@ -1221,6 +1309,9 @@ async function drawZones(zones: GISZoneMap) {
                 center: { x, y, z: -z },
                 color,
                 elevation,
+                waterElevation,
+                type,
+                tileIndex: index,
             })
         );
 
@@ -1239,38 +1330,20 @@ async function drawZones(zones: GISZoneMap) {
     // 普通材质
     const tilesMat = new CustomShaderMaterial({
         baseMaterial: MeshPhongMaterial,
-        vertexColors: true,
-        transparent: true,
+        // vertexColors: true,
+        // transparent: true,
         // wireframe: true,
-        vertexShader: /* glsl */ `
-            attribute float elevation;
-            varying float vElevation;
-
-            void main() {
-                csm_Position += elevation * normal;
-
-                vElevation = elevation;
-            }
-        `,
-        fragmentShader: /* glsl */ `
-            varying float vElevation;
-
-            void main() {
-                vec3 color = vec3(0.2, 0.2, 0.2);
-                float colorMix = smoothstep(0.0, 1., vElevation);
-                color = mix(color, vec3(0.0, 1.0, 0.0), colorMix);
-                float colorMix1 = step(1., vElevation);
-                color = mix(color, vec3(0.0, 1.0, 1.0), colorMix1);
-                float colorMix2 = step(12., vElevation);
-                color = mix(color, vec3(1.0, 1.0, 1.0), colorMix2);
-
-                csm_DiffuseColor = vec4(color, 1.0);
-            }
-        `,
+        uniforms: {
+            uTexture: { value: globalTexture },
+        },
+        vertexShader: vertex,
+        fragmentShader: fragment,
     });
 
     curTileLayer = new Mesh(tilesGeo, tilesMat);
     manager.scene.add(curTileLayer);
+    removeZones();
+    lastCurTileLayer = curTileLayer;
 }
 
 /**
@@ -1333,8 +1406,8 @@ function beforeZonesChange() {
 }
 
 /** 销毁分区, 主要是图层和边界 */
-function removeZones() {
-    if (!gisZones) return;
+function removeZones(force?: boolean) {
+    // if (!gisZones && !force) return;
 
     if (curTileEdge) {
         curTileEdge.removeFromParent();
@@ -1345,13 +1418,22 @@ function removeZones() {
         curTileEdge = null;
     }
 
-    if (curTileLayer) {
-        curTileLayer.removeFromParent();
-        curTileLayer.geometry.dispose();
-        // @ts-ignore
-        curTileLayer.material.dispose();
+    // if (curTileLayer && force) {
+    //     curTileLayer.removeFromParent();
+    //     curTileLayer.geometry.dispose();
+    //     // @ts-ignore
+    //     curTileLayer.material.dispose();
 
-        curTileLayer = null;
+    //     curTileLayer = null;
+    // }
+
+    if (lastCurTileLayer) {
+        lastCurTileLayer.removeFromParent();
+        lastCurTileLayer.geometry.dispose();
+        // @ts-ignore
+        lastCurTileLayer.material.dispose();
+
+        lastCurTileLayer = null;
     }
 }
 
@@ -1376,7 +1458,13 @@ function getVisibleZones(zones: GISZoneMap) {
 
             for (const z of Object.values(adj)) {
                 const k = getZoneKey(z);
-                if (all[k] || !isVisibleZone(z)) continue;
+                if (all[k]) continue;
+
+                // 多包括外面一层，避免pan时的断裂
+                if (!isVisibleZone(z)) {
+                    all[k] = z;
+                    continue;
+                }
 
                 all[k] = z;
                 add[k] = z;
@@ -1527,4 +1615,93 @@ export async function panToPos(pos: Vector3) {
         const des = manager.calcCollinearVector(pos, oldPos.length());
         manager.createCameraSphereTween(oldPos, des).onComplete(() => resolve(true));
     });
+}
+
+/** 计算向量的正方向，规定为垂直于该向量并指向北极方向, 返回正方向单位向量 */
+export function calcVertexPositiveDir(v: Vector3, radius: number) {
+    const { x, y, z } = v;
+
+    // 北半球
+    if (y > 0) {
+        const n = new Vector3(0, 1, 0);
+        const angle = n.angleTo(v);
+        const length = radius / Math.cos(angle);
+        // (0, length, 0) - (x, y, z)
+        return new Vector3(-x, length - y, -z).normalize();
+    }
+
+    // 赤道
+    if (y === 0) {
+        return new Vector3(0, 1, 0);
+    }
+
+    // 南半球
+    if (y < 0) {
+        const n = new Vector3(0, -1, 0);
+        const angle = n.angleTo(v);
+        const length = radius / Math.cos(angle);
+        // (x, y, z) - (0, -length, 0)
+        return new Vector3(x, y + length, z).normalize();
+    }
+}
+
+function getTextureUVSpan(textureId: number) {
+    if (textureId == null) return;
+
+    const [rows, cols] = TILE_TEXTURE_ATLAS;
+    const deltaU = 1 / cols;
+    const deltaV = 1 / rows;
+
+    const [u, v] = TILE_TEXTURE_MAP[textureId] || DEFAULT_TERRIAN;
+    const leftU = u * deltaU;
+    const bottomV = v * deltaV;
+
+    return { leftU, bottomV, deltaU, deltaV };
+}
+
+/**
+ * 计算顶点 uv 坐标
+ * @param bottomLeft uv坐标范围的左下角
+ * @param deltaU u 坐标单位跨度
+ * @param deltaV v 坐标单位跨度
+ * @param vertex 需要计算的顶点坐标
+ * @param center 坐标范围中心
+ * @param n 正方向, 单位向量
+ */
+function calcVertexUV(
+    bottomLeft: UV,
+    deltaU: number,
+    deltaV: number,
+    vertex: Vector3,
+    center: Vector3,
+    n: Vector3
+): UV {
+    const [u, v] = bottomLeft;
+    const dir = vertex.clone().sub(center).normalize();
+    const angle = dir.angleTo(n);
+
+    // 直接计算的夹角没有方向，这里需要判断夹角方向，使用叉积判断
+    // 在threejs右手坐标系下，叉积指向外逆时针方向，反之为顺时针方向
+    const { z } = n.clone().cross(dir);
+
+    const halfU = deltaU / 2;
+    const halfV = deltaV / 2;
+
+    if (z >= 0) {
+        // dir 在 n 的逆时针方向
+        const _u = u + halfU - halfU * Math.sin(angle);
+        const _v = v + halfV + halfV * Math.cos(angle);
+        return [_u, _v];
+    }
+
+    if (z < 0) {
+        // dir 在 n 的顺时针方向
+        const _u = u + halfU + halfU * Math.sin(angle);
+        const _v = v + halfV + halfV * Math.cos(angle);
+        return [_u, _v];
+    }
+}
+
+function mixValue(v0: number, v1: number, t: number) {
+    return v0 + (v1 - v0) * t;
 }
