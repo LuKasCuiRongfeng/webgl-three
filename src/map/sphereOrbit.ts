@@ -683,7 +683,8 @@ export class SphereOrbitControls extends Controls<EventMap> {
     }
 
     _panSphereUp(angle: number) {
-        this._sphericalPanDelta.phi -= angle;
+        // this._sphericalPanDelta.phi -= angle;
+        this._sphericalPanDelta.phi += angle;
     }
 
     // deltaX and deltaY are in pixels; right and down are positive
@@ -692,8 +693,13 @@ export class SphereOrbitControls extends Controls<EventMap> {
 
         if (this.object instanceof PerspectiveCamera) {
             // 走球面平移
-            this._panSphereLeft((_twoPI * deltaX) / element.clientHeight);
-            this._panSphereUp((_twoPI * deltaY) / element.clientHeight);
+            // this._panSphereLeft((_twoPI * deltaX) / element.clientHeight);
+            // this._panSphereUp((_twoPI * deltaY) / element.clientHeight);
+            const { x, y, z } = this.target
+            const xr = Math.sqrt(x ** 2 + z ** 2)
+            const yr = Math.sqrt(x ** 2 + y ** 2 + z ** 2)
+            this._panSphereLeft(deltaX / (_twoPI * xr));
+            this._panSphereUp(deltaY / (_twoPI * yr));
         } else if (this.object instanceof OrthographicCamera) {
             // orthographic
             this._panLeft(
@@ -737,6 +743,10 @@ export class SphereOrbitControls extends Controls<EventMap> {
         const h = rect.height;
 
         return new Vector3((dx / w) * 2 - 1, -(dy / h) * 2 + 1, z)
+    }
+
+    _getWorldByNdc(ndc: Vector3) {
+        return ndc.unproject(this.object)
     }
 
     /** 更新基于鼠标位置缩放的参数，主要是鼠标的ndc坐标和缩放方向 */
@@ -829,9 +839,10 @@ export class SphereOrbitControls extends Controls<EventMap> {
         this._panEnd.set(event.clientX, event.clientY);
 
         // 直接把 panSpeed = 1，根据像素计算该pan多少角度
-        const start = this._getNdcByPixel(this._panStart.x, this._panStart.y)
-        const end = this._getNdcByPixel(this._panEnd.x, this._panEnd.y)
-        this._panDelta.subVectors(this._panEnd, this._panStart).multiplyScalar(this.panSpeed);
+        const start = this._getWorldByNdc(this._getNdcByPixel(this._panStart.x, this._panStart.y))
+        const end = this._getWorldByNdc(this._getNdcByPixel(this._panEnd.x, this._panEnd.y))
+        // this._panDelta.subVectors(this._panEnd, this._panStart).multiplyScalar(this.panSpeed);
+        this._panDelta.subVectors(end, start).multiplyScalar(this.panSpeed);
 
         this._pan(this._panDelta.x, this._panDelta.y);
 

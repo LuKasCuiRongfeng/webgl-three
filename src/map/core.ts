@@ -1125,7 +1125,7 @@ function setChangingControl() {
     } else if (isLowHeight) {
         control.rotateSpeed = 1;
         control.zoomSpeed = 2;
-        control.panSpeed = 0.0005
+        // control.panSpeed = 0.0005
         // 靠近极地 0.5
         // 靠近赤道 0.005
         // const y = control.target.y;
