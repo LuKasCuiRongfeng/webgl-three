@@ -7,31 +7,26 @@ import ThreeManager, {
     Color,
     CustomShaderMaterial,
     DirectionalLight,
-    DoubleSide,
     Float32BufferAttribute,
-    InstancedBufferAttribute,
-    InstancedBufferGeometry,
-    InstancedMesh,
-    Matrix4,
     LineSegments,
     Mesh,
-    MeshBasicMaterial,
     MeshPhongMaterial,
     PerspectiveCamera,
-    PlaneGeometry,
-    Quaternion,
     Scene,
     SphereGeometry,
     Stats,
     TWEEN,
     Uniform,
     Vector3,
-    SphereOrbitControls,
     Texture,
     SRGBColorSpace,
     MOUSE,
+    PointLight,
+    Lensflare,
+    LensflareElement,
+    Spherical,
+    BackSide,
 } from "./three-manager";
-import { open } from "@tauri-apps/plugin-dialog";
 import { getBytesUtils, readFileBase64, sleep } from "./utils";
 import { LL2TID } from "./LL2TID";
 import {
@@ -39,7 +34,6 @@ import {
     CAMEARA_TO_EARTH_MAX_DIS,
     CAMEARA_TO_EARTH_MIN_DIS,
     DEFAULT_TERRIAN,
-    EARTH_COLOR,
     EDIT_ZOOM,
     HEIGHT_SEGMENTS,
     INIT_GISZONE,
@@ -53,8 +47,6 @@ import {
     MAX_MOVE_DELTA_SQA,
     MAX_ZOOM,
     MIN_ZOOM,
-    TILE_LAND_ALPHA_COLOR,
-    TILE_LAND_COLOR,
     TILE_TEXTURE_ATLAS,
     TILE_TEXTURE_MAP,
     WIDTH_SEGMENTS,
@@ -67,8 +59,10 @@ import { Coordinate, GISZone, GISZoneMap, GISZoneTileIndicesMap, MapInitStatus, 
 
 import fragment from "./frag.glsl";
 import vertex from "./vert.glsl";
-import { debounce, isEqual, throttle } from "lodash-es";
-import { CONTROL_STATE } from "./sphereOrbit";
+import { isEqual, throttle } from "lodash-es";
+// import { CONTROL_STATE } from "./sphereOrbit";
+import lensflare0 from "../assets/lensflare0.png";
+import lensflare3 from "../assets/lensflare3.png";
 
 /** 操作地图数据的对象 */
 let mapBytesUtils: MapBytesUtils = null;
@@ -140,7 +134,7 @@ const tileIndexUVMap: Map<number, number[]> = new Map();
 /** 地图初始化状态 */
 const mapInitStatus: MapInitStatus = { loadPercent: 0 };
 
-const time = new Uniform(0);
+// const time = new Uniform(0);
 
 let stats: Stats = null;
 /** 自定义当前的缩放层级 */
@@ -152,13 +146,24 @@ let zoom = INIT_ZOOM;
  */
 let gisZones: GISZoneMap = {};
 
-let controlChanging = false;
+export let controlChanging = false;
 
 let globalMesh: Mesh = null;
 
 let isLowHeight = false;
 
 let globalTexture: Texture = null;
+
+let sunOrbit: Spherical = null;
+
+let dirLight: DirectionalLight = null;
+let pLight: PointLight = null;
+
+const uniforms = {
+    sunDir: new Uniform(new Vector3(0, 0, 1)),
+    atmoshpereDay: new Uniform(new Color("#00aaff")),
+    atmoshpereTwilight: new Uniform(new Color("#ff6600")),
+};
 
 export async function initMap() {
     if (haveInitialed) {
@@ -205,7 +210,7 @@ export async function initMap() {
 
     crateLight();
 
-    registerCanvasEvent(manager.getRenderer().domElement);
+    // registerCanvasEvent(manager.getRenderer().domElement);
 
     // await preprocessInstanceTiles();
 
@@ -220,14 +225,14 @@ export async function initMap() {
 
 /** 初始化相机 */
 function initCamera() {
-    const { radius, tilesCount, cornersCount } = meshBytesUtils.getHeader();
+    const { radius, cornersCount } = meshBytesUtils.getHeader();
     // 重置顶点数量，非常重要
     getLL2TID().CornerTop = cornersCount;
 
     earthRadius = radius;
 
     // 相机
-    manager.camera = new PerspectiveCamera(50, 1, 0.1, radius * 2);
+    manager.camera = new PerspectiveCamera(50, 1, 0.1, radius * 5);
 
     manager.camera.position.set(0, 0, radius + CAMEARA_TO_EARTH_INIT_DIS);
 
@@ -359,29 +364,127 @@ function getOrbitControls() {
 }
 
 /** 创建地球球体 */
-function createEarth() {
-    const { radius } = meshBytesUtils.getHeader();
+// function createEarth() {
+//     const { radius } = meshBytesUtils.getHeader();
 
-    const earthGeometry = new SphereGeometry(radius - 5, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
-    const earthMaterial = new MeshBasicMaterial({
-        color: EARTH_COLOR,
-        wireframe: true,
-    });
-    earth = new Mesh(earthGeometry, earthMaterial);
-    // manager.axesHelper(earth, radius * 1.5);
-    manager.scene.add(earth);
-}
+//     const earthGeometry = new SphereGeometry(radius - 5, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
+//     const earthMaterial = new MeshBasicMaterial({
+//         color: EARTH_COLOR,
+//         wireframe: true,
+//     });
+//     earth = new Mesh(earthGeometry, earthMaterial);
+//     // manager.axesHelper(earth, radius * 1.5);
+//     manager.scene.add(earth);
+//     earth.visible = false;
+// }
 
 function crateLight() {
-    const light = new DirectionalLight(0xffffff, 1);
-    const ambiet = new AmbientLight(0xffffff, 1);
-    light.position.copy(manager.camera.position);
+    dirLight = new DirectionalLight(0xffffff, 2);
+    const ambiet = new AmbientLight(0xffffff, 2);
+    dirLight.position.copy(manager.camera.position);
 
-    manager.scene.add(light, ambiet);
+    // 光晕
+    const loader = manager.getTextureLoader();
+    const lens0 = loader.load(lensflare0);
+    const lens3 = loader.load(lensflare3);
+
+    pLight = new PointLight(0xffffff, 6, 2000, 0);
+    pLight.color.setHSL(0.995, 0.5, 0.9);
+    pLight.position.copy(manager.camera.position);
+
+    const len = new Lensflare();
+    len.addElement(new LensflareElement(lens0, 700, 0, pLight.color));
+    len.addElement(new LensflareElement(lens3, 100, 0.1));
+    len.addElement(new LensflareElement(lens3, 160, 0.2));
+    len.addElement(new LensflareElement(lens3, 100, 0.3));
+    pLight.add(len);
+
+    // 直射赤道
+    sunOrbit = new Spherical(2000, 66.6 * (Math.PI / 180), 0);
+
+    manager.scene.add(dirLight, ambiet, pLight);
+
+    atmoshpere();
+}
+
+function udpateLight(elapsed: number) {
+    if (!sunOrbit || !pLight || !dirLight) return;
+
+    sunOrbit.theta = elapsed * 0.5;
+    const v = new Vector3();
+    v.setFromSpherical(sunOrbit);
+    pLight.position.copy(v);
+    dirLight.position.copy(v);
+
+    uniforms.sunDir.value.copy(v.normalize());
+}
+
+function atmoshpere() {
+    const { radius } = meshBytesUtils.getHeader();
+
+    const earthGeometry = new SphereGeometry(radius, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
+
+    const atmo = new Mesh(
+        earthGeometry,
+        new CustomShaderMaterial({
+            baseMaterial: MeshPhongMaterial,
+            side: BackSide,
+            transparent: true,
+            uniforms: uniforms,
+            vertexShader: /* glsl */ `
+                varying vec3 xNormal;
+                varying vec3 vPosition;
+
+                void main() {
+                    xNormal = normal;
+                    vPosition = csm_Position.xyz;
+                }
+            `,
+            fragmentShader: /* glsl */ `
+                varying vec3 xNormal;
+                varying vec3 vPosition;
+                uniform vec3 sunDir;
+                uniform vec3 atmoshpereDay;
+                uniform vec3 atmoshpereTwilight;
+
+                void main() {
+                    vec3 fnormal = normalize(xNormal);
+                    vec3 color = vec3(0.);
+                    // -1 ~1 方向反了
+                    float sunOrientation = dot(sunDir, fnormal);
+                
+                    // fresnel 菲涅尔
+                    vec3 viewDirection = normalize(vPosition - cameraPosition);
+                    float fresnel = dot(viewDirection, fnormal) + 1.0;
+                    fresnel = pow(fresnel, 2.0);
+                
+                    // atomoshpere
+                    float atMix = smoothstep(-0.5, 1.0, sunOrientation);
+                    vec3 aColor = mix(atmoshpereTwilight, atmoshpereDay, atMix);
+                    // color = mix(color, aColor, fresnel * atMix);
+                    color += aColor;
+
+                    // al
+                    float alpha = dot(viewDirection, fnormal);
+                    alpha = smoothstep(0.0, 0.5, alpha);
+
+                    float dayAlpha = smoothstep(-0.5, 0.0, sunOrientation);
+
+                    float finalAlpha = alpha * dayAlpha;
+                
+                    csm_DiffuseColor = vec4(color, finalAlpha);
+                }
+            `,
+        })
+    );
+    atmo.scale.set(1.08, 1.08, 1.08);
+
+    // const earth = new Mesh(earthGeometry, new MeshPhongMaterial({ color: 0xff0000 }))
+    manager.scene.add(atmo, earth);
 }
 
 /** 注册canvas 事件 */
-function registerCanvasEvent(canvas: HTMLCanvasElement) {}
+// function registerCanvasEvent(canvas: HTMLCanvasElement) {}
 
 /** 预处理地块 */
 async function preprocessTiles() {
@@ -437,161 +540,161 @@ async function preprocessTiles() {
 }
 
 /** instance 处理地块 */
-async function preprocessInstanceTiles() {
-    const { tilesCount } = meshBytesUtils.getHeader();
+// async function preprocessInstanceTiles() {
+//     const { tilesCount } = meshBytesUtils.getHeader();
 
-    let first5Geometry: InstancedBufferGeometry = null;
-    let first5Center: Vector3 = null;
-    let first5Mesh: InstancedMesh = null;
-    let first6Geometry: InstancedBufferGeometry = null;
-    let first6Center: Vector3 = null;
-    let first6Mesh: InstancedMesh = null;
+//     let first5Geometry: InstancedBufferGeometry = null;
+//     let first5Center: Vector3 = null;
+//     let first5Mesh: InstancedMesh = null;
+//     let first6Geometry: InstancedBufferGeometry = null;
+//     let first6Center: Vector3 = null;
+//     let first6Mesh: InstancedMesh = null;
 
-    for (let i = 0; i < tilesCount; i++) {
-        const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
+//     for (let i = 0; i < tilesCount; i++) {
+//         const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
 
-        const vertices = corners.map<Coordinate>((v) => {
-            const corner = meshBytesUtils.getCornerByIndex(v);
-            return {
-                x: corner.x,
-                y: corner.y,
-                z: -corner.z,
-            };
-        });
+//         const vertices = corners.map<Coordinate>((v) => {
+//             const corner = meshBytesUtils.getCornerByIndex(v);
+//             return {
+//                 x: corner.x,
+//                 y: corner.y,
+//                 z: -corner.z,
+//             };
+//         });
 
-        const color = randomColor();
+//         const color = randomColor();
 
-        const points: number[] = [
-            // 12, 0, 0,
-            // 12, 12, 0,
-            // -12, 12, 0,
-            // -12, -12, 0,
-            // 0, -12, 0,
-            // 12, 12, 12
-        ];
-        const colors: number[] = [];
-        vertices.forEach((v) => {
-            points.push(v.x, v.y, v.z);
-            colors.push(...color);
-        });
+//         const points: number[] = [
+//             // 12, 0, 0,
+//             // 12, 12, 0,
+//             // -12, 12, 0,
+//             // -12, -12, 0,
+//             // 0, -12, 0,
+//             // 12, 12, 12
+//         ];
+//         const colors: number[] = [];
+//         vertices.forEach((v) => {
+//             points.push(v.x, v.y, v.z);
+//             colors.push(...color);
+//         });
 
-        if (!first5Geometry && corners.length === 5) {
-            first5Geometry = new InstancedBufferGeometry();
-            first5Geometry.instanceCount = 12;
-            first5Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
+//         if (!first5Geometry && corners.length === 5) {
+//             first5Geometry = new InstancedBufferGeometry();
+//             first5Geometry.instanceCount = 12;
+//             first5Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
 
-            // first5Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
+//             // first5Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
 
-            first5Geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]);
-            // first5Geometry.translate(-x, -y, z)
+//             first5Geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]);
+//             // first5Geometry.translate(-x, -y, z)
 
-            // first5Geometry = new SphereGeometry(3, 3, 3)
-            // first5Geometry = new PlaneGeometry(3, 3, 1, 2);
-            // first5Geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+//             // first5Geometry = new SphereGeometry(3, 3, 3)
+//             // first5Geometry = new PlaneGeometry(3, 3, 1, 2);
+//             // first5Geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
 
-            first5Center = new Vector3(x, y, -z).normalize();
+//             first5Center = new Vector3(x, y, -z).normalize();
 
-            first5Mesh = new InstancedMesh(
-                first5Geometry,
-                new MeshPhongMaterial({
-                    // vertexColors: true,
-                    // transparent: true,
-                    color: 0xff0000,
-                    wireframe: true,
-                }),
-                12
-            );
-        }
+//             first5Mesh = new InstancedMesh(
+//                 first5Geometry,
+//                 new MeshPhongMaterial({
+//                     // vertexColors: true,
+//                     // transparent: true,
+//                     color: 0xff0000,
+//                     wireframe: true,
+//                 }),
+//                 12
+//             );
+//         }
 
-        if (!first6Geometry && corners.length === 6) {
-            first6Geometry = new InstancedBufferGeometry();
-            first6Geometry.instanceCount = tilesCount - 12;
-            first6Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
+//         if (!first6Geometry && corners.length === 6) {
+//             first6Geometry = new InstancedBufferGeometry();
+//             first6Geometry.instanceCount = tilesCount - 12;
+//             first6Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
 
-            // first6Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
-            first6Geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]);
-            // first6Geometry.translate(-x, -y, z)
+//             // first6Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
+//             first6Geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]);
+//             // first6Geometry.translate(-x, -y, z)
 
-            // first6Geometry = new SphereGeometry(2, 3, 3)
-            // first6Geometry = new PlaneGeometry(3, 3, 1, 2);
-            // first6Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
+//             // first6Geometry = new SphereGeometry(2, 3, 3)
+//             // first6Geometry = new PlaneGeometry(3, 3, 1, 2);
+//             // first6Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
 
-            first6Center = new Vector3(x, y, -z).normalize();
+//             first6Center = new Vector3(x, y, -z).normalize();
 
-            first6Mesh = new InstancedMesh(
-                first6Geometry,
-                new CustomShaderMaterial({
-                    baseMaterial: MeshPhongMaterial,
-                    // vertexColors: true,
-                    // transparent: true,
-                    color: 0xff0000,
-                    wireframe: true,
-                    vertexShader: /* glsl */ `
-                        // uniform float time;
-                        // void main() {
-                        //     int a = gl_InstanceID;
-                        //     if (mod(float(a), 4.0) == 0.) {
-                        //         csm_Position.y += sin(csm_Position.x + time + float(a)) * 100.0;
-                        //     }
-                        // }
-                    `,
-                    uniforms: {
-                        time,
-                    },
-                }),
-                tilesCount - 12
-            );
+//             first6Mesh = new InstancedMesh(
+//                 first6Geometry,
+//                 new CustomShaderMaterial({
+//                     baseMaterial: MeshPhongMaterial,
+//                     // vertexColors: true,
+//                     // transparent: true,
+//                     color: 0xff0000,
+//                     wireframe: true,
+//                     vertexShader: /* glsl */ `
+//                         // uniform float time;
+//                         // void main() {
+//                         //     int a = gl_InstanceID;
+//                         //     if (mod(float(a), 4.0) == 0.) {
+//                         //         csm_Position.y += sin(csm_Position.x + time + float(a)) * 100.0;
+//                         //     }
+//                         // }
+//                     `,
+//                     uniforms: {
+//                         time,
+//                     },
+//                 }),
+//                 tilesCount - 12
+//             );
 
-            // first6Mesh.scale.set(10, 10, 10)
-        }
+//             // first6Mesh.scale.set(10, 10, 10)
+//         }
 
-        if (first5Geometry && first6Geometry) break;
-    }
+//         if (first5Geometry && first6Geometry) break;
+//     }
 
-    let p5 = 0,
-        p6 = 0;
+//     let p5 = 0,
+//         p6 = 0;
 
-    const f = new Vector3(0, 0, 1);
+//     const f = new Vector3(0, 0, 1);
 
-    if (first5Geometry && first6Geometry) {
-        for (let i = 0; i < 500; i++) {
-            const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
-            const matrix = new Matrix4();
-            const pos = new Vector3(x, y, -z);
-            const color = randomColor();
-            if (corners.length === 5) {
-                // matrix.setPosition(pos)
-                // matrix.makeRotationFromQuaternion(new Quaternion().random())
-                matrix.compose(
-                    new Vector3(0, 0, 0),
-                    new Quaternion().setFromUnitVectors(first5Center, new Vector3(x, y, -z).normalize()),
-                    new Vector3(1, 1, 1)
-                );
-                first5Mesh.setMatrixAt(p5, matrix);
-                // first5Mesh.setColorAt(p5, new Color());
-                p5++;
-            } else {
-                // matrix.setPosition(pos)
-                // matrix.makeRotationFromQuaternion(new Quaternion().random())
-                matrix.compose(
-                    new Vector3(0, 0, 0),
-                    new Quaternion().setFromUnitVectors(first6Center, new Vector3(x, y, -z).normalize()),
-                    new Vector3(1, 1, 1)
-                );
-                first6Mesh.setMatrixAt(p6, matrix);
-                p6++;
-            }
+//     if (first5Geometry && first6Geometry) {
+//         for (let i = 0; i < 500; i++) {
+//             const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
+//             const matrix = new Matrix4();
+//             const pos = new Vector3(x, y, -z);
+//             const color = randomColor();
+//             if (corners.length === 5) {
+//                 // matrix.setPosition(pos)
+//                 // matrix.makeRotationFromQuaternion(new Quaternion().random())
+//                 matrix.compose(
+//                     new Vector3(0, 0, 0),
+//                     new Quaternion().setFromUnitVectors(first5Center, new Vector3(x, y, -z).normalize()),
+//                     new Vector3(1, 1, 1)
+//                 );
+//                 first5Mesh.setMatrixAt(p5, matrix);
+//                 // first5Mesh.setColorAt(p5, new Color());
+//                 p5++;
+//             } else {
+//                 // matrix.setPosition(pos)
+//                 // matrix.makeRotationFromQuaternion(new Quaternion().random())
+//                 matrix.compose(
+//                     new Vector3(0, 0, 0),
+//                     new Quaternion().setFromUnitVectors(first6Center, new Vector3(x, y, -z).normalize()),
+//                     new Vector3(1, 1, 1)
+//                 );
+//                 first6Mesh.setMatrixAt(p6, matrix);
+//                 p6++;
+//             }
 
-            if (i % 100000 === 0) {
-                const per = Math.round((i / tilesCount) * 100);
-                mapInitStatus.loadPercent = 0.5 * per;
-                await sleep(0);
-            }
-        }
-    }
+//             if (i % 100000 === 0) {
+//                 const per = Math.round((i / tilesCount) * 100);
+//                 mapInitStatus.loadPercent = 0.5 * per;
+//                 await sleep(0);
+//             }
+//         }
+//     }
 
-    manager.scene.add(first5Mesh, first6Mesh);
-}
+//     manager.scene.add(first5Mesh, first6Mesh);
+// }
 
 async function drawLayer() {
     if (globalMesh) return;
@@ -616,7 +719,7 @@ async function drawLayer() {
     for (let index = 0; index < tilesCount; index++) {
         const { corners, x, y, z } = meshBytesUtils.getTileByIndex(index);
         const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(index);
-        const isLand = elevation > waterElevation;
+        // const isLand = elevation > waterElevation;
 
         if (elevation < -waterElevation) {
             tid = 40;
@@ -742,17 +845,29 @@ async function drawLayer() {
         transparent: true,
         // color: 0xff0000,
         // wireframe: true,
+        uniforms: uniforms,
         vertexShader: /* glsl */ `
             attribute float colorMix;
             varying float vColorMix;
+            varying vec3 xNormal;
+            varying vec3 vPosition;
 
             void main() {
                 vColorMix = colorMix;
+                xNormal = normal;
+                vPosition = csm_Position.xyz;
             }
         `,
         fragmentShader: /* glsl */ `
             varying float vColorMix;
+            varying vec3 xNormal;
+            varying vec3 vPosition;
+            uniform vec3 sunDir;
+            uniform vec3 atmoshpereDay;
+            uniform vec3 atmoshpereTwilight;
+
             void main() {
+                vec3 fnormal = normalize(xNormal);
                 vec3 color = vec3(0., 0., 1.);
                 float mix1 = smoothstep(-2.0, 0.1, vColorMix);
                 color = mix(color, vec3(0., 1., 0.), mix1);
@@ -764,6 +879,35 @@ async function drawLayer() {
                 color = mix(color, vec3(0.9), mix3);
                 float mix4 = step(18.1, vColorMix);
                 color = mix(color, vec3(1.0), mix4);
+
+                vec3 night = color * 0.002;
+                // -1 ~1 方向反了
+                float sunOrientation = dot(sunDir, fnormal);
+                float dayMix = smoothstep(-0.25, 0.5, sunOrientation);
+
+                // 纠正方向
+                color = mix(night, color, dayMix);
+
+                // fresnel 菲涅尔
+                vec3 viewDirection = normalize(vPosition - cameraPosition);
+                float fresnel = dot(viewDirection, fnormal) + 1.0;
+                fresnel = pow(fresnel, 2.0);
+
+                // atomoshpere
+                float atMix = smoothstep(-0.5, 1.0, sunOrientation);
+                vec3 aColor = mix(atmoshpereTwilight, atmoshpereDay, atMix);
+                color = mix(color, aColor, fresnel * atMix);
+
+                // specular
+                vec3 reflection = reflect(-sunDir, fnormal);
+                float specular1 = -dot(reflection, viewDirection);
+                specular1 = max(specular1, 0.);
+                specular1 = pow(specular1, 32.);
+
+                vec3 specularColor1 = mix(vec3(1.0), aColor, fresnel);
+
+                color += specular * specularColor1;
+
                 csm_DiffuseColor = vec4(color, 1.0);
             }
         `,
@@ -797,10 +941,10 @@ export function createTileGeometry(op: {
 }) {
     const geometry = new BufferGeometry();
     const points: number[] = [];
-    const colors: number[] = [];
+    // const colors: number[] = [];
     const colorMix: number[] = [];
 
-    const { vertices, color, elevation, waterElevation } = op;
+    const { vertices,  elevation, waterElevation } = op;
 
     const count = vertices.length;
 
@@ -848,7 +992,7 @@ export function createComplexTileGeometry(op: {
     const elevations: number[] = [];
     const colorMix: number[] = [];
 
-    const { vertices, color, center, elevation, waterElevation, tileIndex } = op;
+    const { vertices,  center, elevation, waterElevation, tileIndex } = op;
 
     const count = vertices.length;
 
@@ -938,7 +1082,9 @@ function render() {
 
         stats?.update();
 
-        time.value = manager.getClock().getElapsedTime();
+        const elapsed = manager.getClock().getElapsedTime();
+        // time.value = manager.getClock().getElapsedTime();
+        udpateLight(elapsed);
 
         manager.getRenderer().render(manager.scene, manager.camera);
     });
@@ -1125,12 +1271,12 @@ function setChangingControl() {
     } else if (isLowHeight) {
         control.rotateSpeed = 1;
         control.zoomSpeed = 2;
-        // control.panSpeed = 0.0005
+        control.panSpeed = 0.006;
         // 靠近极地 0.5
         // 靠近赤道 0.005
         // const y = control.target.y;
 
-        // control.panSpeed = mixValue(0.5, 0.0005, 1 - Math.abs(y) / earthRadius);
+        // control.panSpeed = mixValue(0.5, 0.005, 1 - Math.abs(y) / earthRadius);
     }
 }
 
@@ -1253,7 +1399,7 @@ async function drawZones(zones: GISZoneMap) {
 
     if (tileIndices.length === 0) return;
     const zoneTilesGeoArray: BufferGeometry[] = [];
-    const zoneEdgeGeoArray: BufferGeometry[] = [];
+    // const zoneEdgeGeoArray: BufferGeometry[] = [];
 
     // 预先分配好，减少计算
     let accumFaceIndex = -1;
@@ -1406,7 +1552,7 @@ function beforeZonesChange() {
 }
 
 /** 销毁分区, 主要是图层和边界 */
-function removeZones(force?: boolean) {
+function removeZones() {
     // if (!gisZones && !force) return;
 
     if (curTileEdge) {
@@ -1702,6 +1848,6 @@ function calcVertexUV(
     }
 }
 
-function mixValue(v0: number, v1: number, t: number) {
+export function mixValue(v0: number, v1: number, t: number) {
     return v0 + (v1 - v0) * t;
 }

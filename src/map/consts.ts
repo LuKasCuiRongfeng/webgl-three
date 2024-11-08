@@ -215,7 +215,7 @@ export const ZOOM_SPEED = new Map([
 
 /** 层级-距离映射 */
 export const ZOOM_DIS = new Map([
-    [1, 1500],
+    [1, 2500],
     [2, 500],
     [3, 200],
     [4, 100],

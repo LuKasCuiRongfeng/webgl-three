@@ -22,8 +22,12 @@ void main() {
     float mix4 = step(18.1, vColorMix);
     color = mix(color, vec3(1.0), mix4);
 
+    // 混合纹理的颜色
+    // color = color * tColor.rgb;
+    color = tColor.rgb;
+
     // csm_DiffuseColor = vec4(vUV.xy, 1.0, 1.0);
-    csm_DiffuseColor = vec4(color * tColor.rgb, 1.0);
+    csm_DiffuseColor = vec4(color, 1.0);
 
     // csm_DiffuseColor = vec4(tColor.rgb, 1.0);
 }

@@ -84,19 +84,20 @@ import {
     InstancedMesh,
     Matrix4,
     Uniform,
-    Float32BufferAttribute
+    Float32BufferAttribute,
+    PointLight,
 } from "three";
 
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+// import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { DragControls } from "three/examples/jsm/controls/DragControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+// import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
+// import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { MeshBVH, acceleratedRaycast } from "three-mesh-bvh";
@@ -106,6 +107,7 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { ImprovedNoise } from "three/examples/jsm/math/ImprovedNoise.js";
+import { Lensflare, LensflareElement } from "three/addons/objects/lensflare.js"
 import Stats from "three/addons/libs/stats.module.js"
 
 import CustomShaderMaterial from "three-custom-shader-material/vanilla"
@@ -228,7 +230,7 @@ class ThreeManager {
      * @param duration 持续视角
      * @param autoStart 动画自动执行，默认true
      */
-    createCameraSphereQuaternionTween(start: Vector3, end: Vector3, duration = 300, autoStart = true) {
+    createCameraSphereQuaternionTween(_start: Vector3, end: Vector3, duration = 300, autoStart = true) {
         // tween必须重新创建
         const q1 = this.camera.quaternion;
         const q2 = new Quaternion().setFromUnitVectors(new Vector3(0, 0, 1), end.clone().normalize());
@@ -357,7 +359,7 @@ class ThreeManager {
 
     getComposer() {
         if (this.composer == undefined) {
-            const canvas = this.renderer.domElement;
+            // const canvas = this.renderer.domElement;
             this.composer = new EffectComposer(this.renderer);
 
             const renderPass = new RenderPass(this.scene, this.camera);
@@ -707,5 +709,8 @@ export {
     Stats,
     Uniform,
     Float32BufferAttribute,
-    SphereOrbitControls
+    SphereOrbitControls,
+    Lensflare,
+    LensflareElement,
+    PointLight
 };

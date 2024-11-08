@@ -1,5 +1,4 @@
 import { IdModelMapBytesUtils, MapBytesUtils, MeshBytesUtils, ProvBytesUtils } from "./bytesUtils";
-import ThreeManager from "./three-manager";
 import { open } from "@tauri-apps/plugin-dialog";
 import { exists, readFile } from "@tauri-apps/plugin-fs";
 
