@@ -26,6 +26,10 @@ import ThreeManager, {
     LensflareElement,
     Spherical,
     BackSide,
+    InstancedBufferGeometry,
+    InstancedMesh,
+    Matrix4,
+    Quaternion,
 } from "./three-manager";
 import { getBytesUtils, readFileBase64, sleep } from "./utils";
 import { LL2TID } from "./LL2TID";
@@ -404,7 +408,7 @@ function crateLight() {
 
     manager.scene.add(dirLight, ambiet, pLight);
 
-    atmoshpere();
+    createAtmosphere();
 }
 
 function udpateLight(elapsed: number) {
@@ -419,7 +423,7 @@ function udpateLight(elapsed: number) {
     uniforms.sunDir.value.copy(v.normalize());
 }
 
-function atmoshpere() {
+function createAtmosphere() {
     const { radius } = meshBytesUtils.getHeader();
 
     const earthGeometry = new SphereGeometry(radius, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
@@ -428,6 +432,7 @@ function atmoshpere() {
         earthGeometry,
         new CustomShaderMaterial({
             baseMaterial: MeshPhongMaterial,
+            // 技巧，显示背面，剔除正面
             side: BackSide,
             transparent: true,
             uniforms: uniforms,
@@ -454,9 +459,9 @@ function atmoshpere() {
                     float sunOrientation = dot(sunDir, fnormal);
                 
                     // fresnel 菲涅尔
-                    vec3 viewDirection = normalize(vPosition - cameraPosition);
-                    float fresnel = dot(viewDirection, fnormal) + 1.0;
-                    fresnel = pow(fresnel, 2.0);
+                    // vec3 viewDirection = normalize(vPosition - cameraPosition);
+                    // float fresnel = dot(viewDirection, fnormal) + 1.0;
+                    // fresnel = pow(fresnel, 2.0);
                 
                     // atomoshpere
                     float atMix = smoothstep(-0.5, 1.0, sunOrientation);
@@ -464,7 +469,7 @@ function atmoshpere() {
                     // color = mix(color, aColor, fresnel * atMix);
                     color += aColor;
 
-                    // al
+                    // alpha
                     float alpha = dot(viewDirection, fnormal);
                     alpha = smoothstep(0.0, 0.5, alpha);
 
@@ -477,10 +482,10 @@ function atmoshpere() {
             `,
         })
     );
-    atmo.scale.set(1.08, 1.08, 1.08);
+    // 稍微放大
+    atmo.scale.set(1.06, 1.06, 1.06);
 
-    // const earth = new Mesh(earthGeometry, new MeshPhongMaterial({ color: 0xff0000 }))
-    manager.scene.add(atmo, earth);
+    manager.scene.add(atmo);
 }
 
 /** 注册canvas 事件 */
@@ -540,161 +545,161 @@ async function preprocessTiles() {
 }
 
 /** instance 处理地块 */
-// async function preprocessInstanceTiles() {
-//     const { tilesCount } = meshBytesUtils.getHeader();
+async function preprocessInstanceTiles() {
+    const { tilesCount } = meshBytesUtils.getHeader();
 
-//     let first5Geometry: InstancedBufferGeometry = null;
-//     let first5Center: Vector3 = null;
-//     let first5Mesh: InstancedMesh = null;
-//     let first6Geometry: InstancedBufferGeometry = null;
-//     let first6Center: Vector3 = null;
-//     let first6Mesh: InstancedMesh = null;
+    let first5Geometry: InstancedBufferGeometry = null;
+    let first5Center: Vector3 = null;
+    let first5Mesh: InstancedMesh = null;
+    let first6Geometry: InstancedBufferGeometry = null;
+    let first6Center: Vector3 = null;
+    let first6Mesh: InstancedMesh = null;
 
-//     for (let i = 0; i < tilesCount; i++) {
-//         const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
+    for (let i = 0; i < tilesCount; i++) {
+        const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
 
-//         const vertices = corners.map<Coordinate>((v) => {
-//             const corner = meshBytesUtils.getCornerByIndex(v);
-//             return {
-//                 x: corner.x,
-//                 y: corner.y,
-//                 z: -corner.z,
-//             };
-//         });
+        const vertices = corners.map<Coordinate>((v) => {
+            const corner = meshBytesUtils.getCornerByIndex(v);
+            return {
+                x: corner.x,
+                y: corner.y,
+                z: -corner.z,
+            };
+        });
 
-//         const color = randomColor();
+        const color = randomColor();
 
-//         const points: number[] = [
-//             // 12, 0, 0,
-//             // 12, 12, 0,
-//             // -12, 12, 0,
-//             // -12, -12, 0,
-//             // 0, -12, 0,
-//             // 12, 12, 12
-//         ];
-//         const colors: number[] = [];
-//         vertices.forEach((v) => {
-//             points.push(v.x, v.y, v.z);
-//             colors.push(...color);
-//         });
+        const points: number[] = [
+            // 12, 0, 0,
+            // 12, 12, 0,
+            // -12, 12, 0,
+            // -12, -12, 0,
+            // 0, -12, 0,
+            // 12, 12, 12
+        ];
+        const colors: number[] = [];
+        vertices.forEach((v) => {
+            points.push(v.x, v.y, v.z);
+            colors.push(...color);
+        });
 
-//         if (!first5Geometry && corners.length === 5) {
-//             first5Geometry = new InstancedBufferGeometry();
-//             first5Geometry.instanceCount = 12;
-//             first5Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
+        if (!first5Geometry && corners.length === 5) {
+            first5Geometry = new InstancedBufferGeometry();
+            first5Geometry.instanceCount = 12;
+            first5Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
 
-//             // first5Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
+            // first5Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
 
-//             first5Geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]);
-//             // first5Geometry.translate(-x, -y, z)
+            first5Geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]);
+            // first5Geometry.translate(-x, -y, z)
 
-//             // first5Geometry = new SphereGeometry(3, 3, 3)
-//             // first5Geometry = new PlaneGeometry(3, 3, 1, 2);
-//             // first5Geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+            // first5Geometry = new SphereGeometry(3, 3, 3)
+            // first5Geometry = new PlaneGeometry(3, 3, 1, 2);
+            // first5Geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
 
-//             first5Center = new Vector3(x, y, -z).normalize();
+            first5Center = new Vector3(x, y, -z).normalize();
 
-//             first5Mesh = new InstancedMesh(
-//                 first5Geometry,
-//                 new MeshPhongMaterial({
-//                     // vertexColors: true,
-//                     // transparent: true,
-//                     color: 0xff0000,
-//                     wireframe: true,
-//                 }),
-//                 12
-//             );
-//         }
+            first5Mesh = new InstancedMesh(
+                first5Geometry,
+                new MeshPhongMaterial({
+                    // vertexColors: true,
+                    // transparent: true,
+                    color: 0xff0000,
+                    wireframe: true,
+                }),
+                12
+            );
+        }
 
-//         if (!first6Geometry && corners.length === 6) {
-//             first6Geometry = new InstancedBufferGeometry();
-//             first6Geometry.instanceCount = tilesCount - 12;
-//             first6Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
+        if (!first6Geometry && corners.length === 6) {
+            first6Geometry = new InstancedBufferGeometry();
+            first6Geometry.instanceCount = tilesCount - 12;
+            first6Geometry.setAttribute("position", new Float32BufferAttribute(points, 3));
 
-//             // first6Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
-//             first6Geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]);
-//             // first6Geometry.translate(-x, -y, z)
+            // first6Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
+            first6Geometry.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]);
+            // first6Geometry.translate(-x, -y, z)
 
-//             // first6Geometry = new SphereGeometry(2, 3, 3)
-//             // first6Geometry = new PlaneGeometry(3, 3, 1, 2);
-//             // first6Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
+            // first6Geometry = new SphereGeometry(2, 3, 3)
+            // first6Geometry = new PlaneGeometry(3, 3, 1, 2);
+            // first6Geometry.setAttribute("color", new InstancedBufferAttribute(new Float32Array(colors), 4));
 
-//             first6Center = new Vector3(x, y, -z).normalize();
+            first6Center = new Vector3(x, y, -z).normalize();
 
-//             first6Mesh = new InstancedMesh(
-//                 first6Geometry,
-//                 new CustomShaderMaterial({
-//                     baseMaterial: MeshPhongMaterial,
-//                     // vertexColors: true,
-//                     // transparent: true,
-//                     color: 0xff0000,
-//                     wireframe: true,
-//                     vertexShader: /* glsl */ `
-//                         // uniform float time;
-//                         // void main() {
-//                         //     int a = gl_InstanceID;
-//                         //     if (mod(float(a), 4.0) == 0.) {
-//                         //         csm_Position.y += sin(csm_Position.x + time + float(a)) * 100.0;
-//                         //     }
-//                         // }
-//                     `,
-//                     uniforms: {
-//                         time,
-//                     },
-//                 }),
-//                 tilesCount - 12
-//             );
+            first6Mesh = new InstancedMesh(
+                first6Geometry,
+                new CustomShaderMaterial({
+                    baseMaterial: MeshPhongMaterial,
+                    // vertexColors: true,
+                    // transparent: true,
+                    color: 0xff0000,
+                    wireframe: true,
+                    vertexShader: /* glsl */ `
+                        // uniform float time;
+                        // void main() {
+                        //     int a = gl_InstanceID;
+                        //     if (mod(float(a), 4.0) == 0.) {
+                        //         csm_Position.y += sin(csm_Position.x + time + float(a)) * 100.0;
+                        //     }
+                        // }
+                    `,
+                    uniforms: {
+                        // time,
+                    },
+                }),
+                tilesCount - 12
+            );
 
-//             // first6Mesh.scale.set(10, 10, 10)
-//         }
+            // first6Mesh.scale.set(10, 10, 10)
+        }
 
-//         if (first5Geometry && first6Geometry) break;
-//     }
+        if (first5Geometry && first6Geometry) break;
+    }
 
-//     let p5 = 0,
-//         p6 = 0;
+    let p5 = 0,
+        p6 = 0;
 
-//     const f = new Vector3(0, 0, 1);
+    const f = new Vector3(0, 0, 1);
 
-//     if (first5Geometry && first6Geometry) {
-//         for (let i = 0; i < 500; i++) {
-//             const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
-//             const matrix = new Matrix4();
-//             const pos = new Vector3(x, y, -z);
-//             const color = randomColor();
-//             if (corners.length === 5) {
-//                 // matrix.setPosition(pos)
-//                 // matrix.makeRotationFromQuaternion(new Quaternion().random())
-//                 matrix.compose(
-//                     new Vector3(0, 0, 0),
-//                     new Quaternion().setFromUnitVectors(first5Center, new Vector3(x, y, -z).normalize()),
-//                     new Vector3(1, 1, 1)
-//                 );
-//                 first5Mesh.setMatrixAt(p5, matrix);
-//                 // first5Mesh.setColorAt(p5, new Color());
-//                 p5++;
-//             } else {
-//                 // matrix.setPosition(pos)
-//                 // matrix.makeRotationFromQuaternion(new Quaternion().random())
-//                 matrix.compose(
-//                     new Vector3(0, 0, 0),
-//                     new Quaternion().setFromUnitVectors(first6Center, new Vector3(x, y, -z).normalize()),
-//                     new Vector3(1, 1, 1)
-//                 );
-//                 first6Mesh.setMatrixAt(p6, matrix);
-//                 p6++;
-//             }
+    if (first5Geometry && first6Geometry) {
+        for (let i = 0; i < 500; i++) {
+            const { x, y, z, corners } = meshBytesUtils.getTileByIndex(i);
+            const matrix = new Matrix4();
+            const pos = new Vector3(x, y, -z);
+            const color = randomColor();
+            if (corners.length === 5) {
+                // matrix.setPosition(pos)
+                // matrix.makeRotationFromQuaternion(new Quaternion().random())
+                matrix.compose(
+                    new Vector3(0, 0, 0),
+                    new Quaternion().setFromUnitVectors(first5Center, new Vector3(x, y, -z).normalize()),
+                    new Vector3(1, 1, 1)
+                );
+                first5Mesh.setMatrixAt(p5, matrix);
+                // first5Mesh.setColorAt(p5, new Color());
+                p5++;
+            } else {
+                // matrix.setPosition(pos)
+                // matrix.makeRotationFromQuaternion(new Quaternion().random())
+                matrix.compose(
+                    new Vector3(0, 0, 0),
+                    new Quaternion().setFromUnitVectors(first6Center, new Vector3(x, y, -z).normalize()),
+                    new Vector3(1, 1, 1)
+                );
+                first6Mesh.setMatrixAt(p6, matrix);
+                p6++;
+            }
 
-//             if (i % 100000 === 0) {
-//                 const per = Math.round((i / tilesCount) * 100);
-//                 mapInitStatus.loadPercent = 0.5 * per;
-//                 await sleep(0);
-//             }
-//         }
-//     }
+            if (i % 100000 === 0) {
+                const per = Math.round((i / tilesCount) * 100);
+                mapInitStatus.loadPercent = 0.5 * per;
+                await sleep(0);
+            }
+        }
+    }
 
-//     manager.scene.add(first5Mesh, first6Mesh);
-// }
+    manager.scene.add(first5Mesh, first6Mesh);
+}
 
 async function drawLayer() {
     if (globalMesh) return;
