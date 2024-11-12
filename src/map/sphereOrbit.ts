@@ -465,8 +465,17 @@ export class SphereOrbitControls extends Controls<EventMap> {
         this.target.clampLength(this.minTargetRadius, this.maxTargetRadius);
         this.target.add(this.cursor);
 
+        this.object.up.set(0, 1, 0)
         if (this.enableZoom && this._isTiltZoom) {
-            this._spherical.phi = this._tiltPhiAngle;
+            if (this._tiltPhiAngle > Math.PI) {
+                this._spherical.phi = _twoPI - this._tiltPhiAngle;
+                // 并把theta旋转pi
+                this._spherical.theta += Math.PI;
+                // 相机反向
+                this.object.up.set(0, -1, 0)
+            } else {
+                this._spherical.phi = this._tiltPhiAngle;
+            }
         }
 
         let zoomChanged = false;

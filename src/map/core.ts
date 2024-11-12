@@ -110,6 +110,8 @@ let earth: Mesh = null;
  */
 const zoneTileIndicesMap: GISZoneTileIndicesMap = new Map();
 
+const zoneMeshMap: Map<string, Mesh> = new Map();
+
 /** 当前分区 tileindex -> vertex[] */
 const curTileVertexIndexMap: Map<number, number[]> = new Map();
 
@@ -167,6 +169,8 @@ const uniforms = {
     sunDir: new Uniform(new Vector3(0, 0, 1)),
     atmoshpereDay: new Uniform(new Color("#00aaff")),
     atmoshpereTwilight: new Uniform(new Color("#ff6600")),
+    uTexture: new Uniform<Texture>(null),
+    uShowPureColor: new Uniform(true)
 };
 
 export async function initMap() {
@@ -220,9 +224,11 @@ export async function initMap() {
 
     await preprocessTiles();
 
-    await drawLayer();
+    await drawAllZoneMesh();
 
-    await drawVirtualZone();
+    // await drawLayer();
+
+    // await drawVirtualZone();
 
     mapInitStatus.loadPercent = 100;
 }
@@ -281,6 +287,8 @@ function setTiltAngle() {
             };
             isLowHeight = true;
             controls.update();
+
+            uniforms.uShowPureColor.value = false
         }
 
         const angle =
@@ -299,6 +307,8 @@ function setTiltAngle() {
             };
             isLowHeight = false;
             controls.update();
+
+            uniforms.uShowPureColor.value = true
         }
     }
 }
@@ -383,8 +393,8 @@ function getOrbitControls() {
 // }
 
 function crateLight() {
-    dirLight = new DirectionalLight(0xffffff, 2);
-    const ambiet = new AmbientLight(0xffffff, 2);
+    dirLight = new DirectionalLight(0xffffff, 1);
+    const ambiet = new AmbientLight(0xffffff, 1);
     dirLight.position.copy(manager.camera.position);
 
     // 光晕
@@ -392,7 +402,7 @@ function crateLight() {
     const lens0 = loader.load(lensflare0);
     const lens3 = loader.load(lensflare3);
 
-    pLight = new PointLight(0xffffff, 6, 2000, 0);
+    pLight = new PointLight(0xffffff, 1, 2000, 0);
     pLight.color.setHSL(0.995, 0.5, 0.9);
     pLight.position.copy(manager.camera.position);
 
@@ -417,6 +427,7 @@ function udpateLight(elapsed: number) {
     sunOrbit.theta = elapsed * 0.5;
     const v = new Vector3();
     v.setFromSpherical(sunOrbit);
+    // v.copy(manager.camera.position);
     pLight.position.copy(v);
     dirLight.position.copy(v);
 
@@ -459,7 +470,7 @@ function createAtmosphere() {
                     float sunOrientation = dot(sunDir, fnormal);
                 
                     // fresnel 菲涅尔
-                    // vec3 viewDirection = normalize(vPosition - cameraPosition);
+                    vec3 viewDirection = normalize(vPosition - cameraPosition);
                     // float fresnel = dot(viewDirection, fnormal) + 1.0;
                     // fresnel = pow(fresnel, 2.0);
                 
@@ -541,6 +552,133 @@ async function preprocessTiles() {
             mapInitStatus.loadPercent = 0.5 * per;
             await sleep(0);
         }
+    }
+}
+
+/** 获取地块的 uv 坐标 */
+function getTileUV(tileIndex: number) {
+    const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(tileIndex);
+    const { x, y, z, corners } = meshBytesUtils.getTileByIndex(tileIndex);
+    const center = new Vector3(x, y, -z);
+    const north = calcVertexPositiveDir(center, earthRadius);
+
+    let tId = type;
+
+    if (elevation <= waterElevation) {
+        tId = 40;
+    }
+
+    const uvSpan = getTextureUVSpan(tId);
+    const { leftU, bottomV, deltaU, deltaV } = uvSpan;
+
+    const centerU = leftU + deltaU / 2;
+    const centerV = bottomV + deltaV / 2;
+
+    const uvs: number[] = [];
+
+    corners.forEach((v) => {
+        const { x, y, z } = meshBytesUtils.getCornerByIndex(v);
+        const uv = calcVertexUV([leftU, bottomV], deltaU, deltaV, new Vector3(x, y, -z), center, north);
+        uvs.push(...uv);
+    });
+
+    const lerpUV: number[] = [];
+    // 插值 uv
+    for (let i = 0; i < uvs.length; i += 2) {
+        const u = uvs[i];
+        const v = uvs[i + 1];
+        lerpUV.push((centerU + u) / 2, (centerV + v) / 2);
+    }
+    lerpUV.push(centerU, centerV);
+
+    uvs.push(...lerpUV);
+
+    return uvs
+}
+
+async function loadGlobalTexture() {
+    const image = new Image();
+    let src = await readFileBase64();
+    src = `data:image/png;base64,${src}`;
+    image.src = src;
+
+    const texture = new Texture(image);
+    texture.colorSpace = SRGBColorSpace;
+    image.onload = () => (texture.needsUpdate = true);
+
+    globalTexture = texture;
+}
+
+/** 
+ * 渲染所有分区对应的网格，这种比merge geometry 更实惠
+ * 
+ * 占据更少的内存，但会多一些drawcall
+ */
+async function drawAllZoneMesh() {
+    await loadGlobalTexture();
+    uniforms.uTexture.value = globalTexture
+
+    let count = 0;
+    const size = zoneTileIndicesMap.size
+
+    for (const [zone, tiles] of zoneTileIndicesMap) {
+        const geoArr: BufferGeometry[] = [];
+        for (let i = 0, len = tiles.length; i < len; i++) {
+            const index = tiles[i];
+
+            const { corners, x, y, z } = meshBytesUtils.getTileByIndex(index);
+            const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(index);
+
+            const vertices = corners.map<Coordinate>((v) => {
+                const corner = meshBytesUtils.getCornerByIndex(v);
+                return {
+                    x: corner.x,
+                    y: corner.y,
+                    z: -corner.z,
+                };
+            });
+
+            const uvs = getTileUV(index)
+            // tileIndexUVMap.set(index, uvs)
+
+            const color = randomColor();
+
+            geoArr.push(
+                createComplexTileGeometry({
+                    vertices,
+                    center: { x, y, z: -z },
+                    color,
+                    elevation,
+                    waterElevation,
+                    type,
+                    tileIndex: index,
+                    uvs
+                })
+            );
+        }
+
+        const geo = BufferGeometryUtils.mergeGeometries(geoArr, false);
+        const mat = new CustomShaderMaterial({
+            baseMaterial: MeshPhongMaterial,
+            // vertexColors: true,
+            // transparent: true,
+            // wireframe: true,
+            uniforms,
+            vertexShader: vertex,
+            fragmentShader: fragment,
+        });
+
+        const mesh = new Mesh(geo, mat);
+        manager.scene.add(mesh);
+        zoneMeshMap.set(zone, mesh);
+
+        if (count % 1 === 0) {
+            const per = Math.round((count / size) * 100);
+            mapInitStatus.loadPercent = 60 + 0.4 * per;
+            await sleep(0);
+        }
+
+        count++
     }
 }
 
@@ -726,7 +864,7 @@ async function drawLayer() {
         const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(index);
         // const isLand = elevation > waterElevation;
 
-        if (elevation < -waterElevation) {
+        if (elevation < waterElevation) {
             tid = 40;
         } else {
             tid = type;
@@ -885,7 +1023,8 @@ async function drawLayer() {
                 float mix4 = step(18.1, vColorMix);
                 color = mix(color, vec3(1.0), mix4);
 
-                vec3 night = color * 0.002;
+                // vec3 night = color * 0.002;
+                vec3 night = color;
                 // -1 ~1 方向反了
                 float sunOrientation = dot(sunDir, fnormal);
                 float dayMix = smoothstep(-0.25, 0.5, sunOrientation);
@@ -949,7 +1088,7 @@ export function createTileGeometry(op: {
     // const colors: number[] = [];
     const colorMix: number[] = [];
 
-    const { vertices,  elevation, waterElevation } = op;
+    const { vertices, elevation, waterElevation } = op;
 
     const count = vertices.length;
 
@@ -990,6 +1129,7 @@ export function createComplexTileGeometry(op: {
     elevation?: number;
     waterElevation?: number;
     type?: number;
+    uvs?: number[]
 }) {
     const geometry = new BufferGeometry();
     const points: number[] = [];
@@ -997,7 +1137,7 @@ export function createComplexTileGeometry(op: {
     const elevations: number[] = [];
     const colorMix: number[] = [];
 
-    const { vertices,  center, elevation, waterElevation, tileIndex } = op;
+    const { vertices, center, elevation, waterElevation, uvs } = op;
 
     const count = vertices.length;
 
@@ -1036,7 +1176,7 @@ export function createComplexTileGeometry(op: {
     // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
     geometry.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1));
     geometry.setAttribute("colorMix", new BufferAttribute(new Float32Array(colorMix), 1));
-    geometry.setAttribute("uv", new Float32BufferAttribute(tileIndexUVMap.get(tileIndex), 2));
+    geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
 
     if (count === 6) {
         // 正六边形再次细分为18个三角面
@@ -1334,6 +1474,7 @@ export function isClickCanvas() {
  * @param pos 相机移动到的位置
  */
 export async function setZones(zones: GISZoneMap, pos?: Vector3) {
+    return
     if (zoom < EDIT_ZOOM) {
         beforeZonesChange();
 
