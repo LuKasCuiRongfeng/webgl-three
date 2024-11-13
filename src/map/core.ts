@@ -337,31 +337,6 @@ function setTiltCamera() {
 function cameraControlChanged() {
     controlChanging = false;
     needsUpdateAfterControlChanged();
-
-    // const controls = getOrbitControls();
-    // if (zoom >= EDIT_ZOOM && !isLowHeight) {
-    //     const pos = manager.camera.position;
-    //     // 修改target
-    //     controls.target.copy(pos.clone().normalize().multiplyScalar(earthRadius));
-    //     controls.enablePan = true;
-    //     controls.minPolarAngle = Math.PI / 2;
-    //     // controls.minAzimuthAngle = 0
-    //     // controls.maxAzimuthAngle = 0;
-    //     controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS;
-    //     controls.rotateSpeed = 1;
-    //     controls.zoomSpeed = 1;
-    //     controls.update();
-    //     isLowHeight = true;
-    // } else if (zoom < EDIT_ZOOM && isLowHeight) {
-    //     controls.target.copy(new Vector3(0, 0, 0));
-    //     controls.enablePan = false;
-    //     controls.minPolarAngle = 0;
-    //     controls.minAzimuthAngle = Infinity;
-    //     controls.maxAzimuthAngle = Infinity;
-    //     controls.minDistance = earthRadius + CAMEARA_TO_EARTH_MIN_DIS;
-    //     controls.update();
-    //     isLowHeight = false;
-    // }
 }
 
 /** 一些需要 在相机控制器改变时的操作放这里 */
