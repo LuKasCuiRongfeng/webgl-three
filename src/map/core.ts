@@ -30,6 +30,7 @@ import ThreeManager, {
     InstancedMesh,
     Matrix4,
     Quaternion,
+    MeshBasicMaterial,
 } from "./three-manager";
 import { getBytesUtils, readFileBase64, sleep } from "./utils";
 import { LL2TID } from "./LL2TID";
@@ -61,8 +62,11 @@ import {
 } from "./consts";
 import { Coordinate, GISZone, GISZoneMap, GISZoneTileIndicesMap, MapInitStatus, UV, XColor } from "./types";
 
-import fragment from "./frag.glsl";
-import vertex from "./vert.glsl";
+import tileFrag from "./shader/tile/frag.glsl";
+import tileVert from "./shader/tile/vert.glsl";
+import atmoFrag from "./shader/atmosphere/frag.glsl";
+import atmoVert from "./shader/atmosphere/vert.glsl";
+
 import { isEqual, throttle } from "lodash-es";
 // import { CONTROL_STATE } from "./sphereOrbit";
 import lensflare0 from "../assets/lensflare0.png";
@@ -143,6 +147,7 @@ const mapInitStatus: MapInitStatus = { loadPercent: 0 };
 // const time = new Uniform(0);
 
 let stats: Stats = null;
+
 /** 自定义当前的缩放层级 */
 let zoom = INIT_ZOOM;
 
@@ -152,27 +157,35 @@ let zoom = INIT_ZOOM;
  */
 let gisZones: GISZoneMap = {};
 
-export let controlChanging = false;
+let controlChanging = false;
 
 let globalMesh: Mesh = null;
 
+/** 是否位于低轨道 */
 let isLowHeight = false;
 
+/** 全局纹理，复用 */
 let globalTexture: Texture = null;
 
+/** 光源轨道 */
 let sunOrbit: Spherical = null;
-
+/** 平行光 */
 let dirLight: DirectionalLight = null;
-let pLight: PointLight = null;
+/** 点光，用于光斑形成 */
+let pointLight: PointLight = null;
 
-let testBall: Mesh = null;
-
+/** uniform 变量，将传入到shader里 */
 const uniforms = {
-    sunDir: new Uniform(new Vector3(0, 0, 1)),
-    atmoshpereDay: new Uniform(new Color("#00aaff")),
-    atmoshpereTwilight: new Uniform(new Color("#ff6600")),
+    /** 光源方向 */
+    uSunDir: new Uniform(new Vector3(0, 0, 1)),
+    /** 大气层白天颜色 */
+    uAtmDay: new Uniform(new Color("#00aaff")),
+    /** 大气层晨昏颜色 */
+    uAtmTwilight: new Uniform(new Color("#ff6600")),
+    /** 输入纹理 */
     uTexture: new Uniform<Texture>(null),
-    uShowPureColor: new Uniform(true),
+    /** 是否使用纯色着色，忽略纹理 */
+    uPureColor: new Uniform(true),
 };
 
 export async function initMap() {
@@ -214,11 +227,11 @@ export async function initMap() {
     mapInitStatus.loadPercent = 10;
 
     // 相机
-    initCamera();
+    createCamerea();
 
     // createEarth();
 
-    crateLight();
+    createLight();
 
     // registerCanvasEvent(manager.getRenderer().domElement);
 
@@ -228,8 +241,6 @@ export async function initMap() {
 
     await drawAllZoneMesh();
 
-    createTestBall();
-
     // await drawLayer();
 
     // await drawVirtualZone();
@@ -237,21 +248,8 @@ export async function initMap() {
     mapInitStatus.loadPercent = 100;
 }
 
-function createTestBall() {
-    if (testBall) return;
-
-    testBall = new Mesh(
-        new SphereGeometry(10, 10, 10),
-        new MeshPhongMaterial({
-            color: "blue",
-        })
-    );
-
-    manager.scene.add(testBall);
-}
-
 /** 初始化相机 */
-function initCamera() {
+function createCamerea() {
     const { radius, cornersCount } = meshBytesUtils.getHeader();
     // 重置顶点数量，非常重要
     getLL2TID().CornerTop = cornersCount;
@@ -274,7 +272,7 @@ function initCamera() {
         LEFT: MOUSE.ROTATE,
     };
 
-    setControl(false);
+    setChangedControl(false);
 
     registerControlEvent();
 }
@@ -308,9 +306,7 @@ function setTiltCamera() {
             };
 
             isLowHeight = true;
-            uniforms.uShowPureColor.value = false;
-
-            testBall?.position.copy(controls.target);
+            uniforms.uPureColor.value = false;
 
             // 重要，更新前更新倾角
             controls.setCameraOrthTiltAngle(angle);
@@ -331,7 +327,7 @@ function setTiltCamera() {
             };
 
             isLowHeight = false;
-            uniforms.uShowPureColor.value = true;
+            uniforms.uPureColor.value = true;
 
             controls.update();
         }
@@ -375,7 +371,7 @@ function needsUpdateWhenControlChanging() {
 
 /** 一些需要 在相机控制器改结束后的操作放这里 */
 function needsUpdateAfterControlChanged() {
-    setControl();
+    setChangedControl();
 }
 
 /** 注册控件事件 */
@@ -402,22 +398,18 @@ function getOrbitControls() {
     return manager.getOrbitControls(manager.camera, manager.getRenderer().domElement);
 }
 
-/** 创建地球球体 */
-// function createEarth() {
-//     const { radius } = meshBytesUtils.getHeader();
+function createEarth() {
+    const { radius } = meshBytesUtils.getHeader();
 
-//     const earthGeometry = new SphereGeometry(radius - 5, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
-//     const earthMaterial = new MeshBasicMaterial({
-//         color: EARTH_COLOR,
-//         wireframe: true,
-//     });
-//     earth = new Mesh(earthGeometry, earthMaterial);
-//     // manager.axesHelper(earth, radius * 1.5);
-//     manager.scene.add(earth);
-//     earth.visible = false;
-// }
+    const earthGeometry = new SphereGeometry(radius - 5, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
+    const earthMaterial = new MeshBasicMaterial({
+        color: 0xffffff,
+    });
+    earth = new Mesh(earthGeometry, earthMaterial);
+    manager.scene.add(earth);
+}
 
-function crateLight() {
+function createLight() {
     dirLight = new DirectionalLight(0xffffff, 1);
     const ambiet = new AmbientLight(0xffffff, 1);
     dirLight.position.copy(manager.camera.position);
@@ -427,105 +419,60 @@ function crateLight() {
     const lens0 = loader.load(lensflare0);
     const lens3 = loader.load(lensflare3);
 
-    pLight = new PointLight(0xffffff, 1, 2000, 0);
-    pLight.color.setHSL(0.995, 0.5, 0.9);
-    pLight.position.copy(manager.camera.position);
+    pointLight = new PointLight(0xffffff, 1, 2000, 0);
+    pointLight.color.setHSL(0.995, 0.5, 0.9);
+    pointLight.position.copy(manager.camera.position);
 
     const len = new Lensflare();
-    len.addElement(new LensflareElement(lens0, 700, 0, pLight.color));
+    len.addElement(new LensflareElement(lens0, 700, 0, pointLight.color));
     len.addElement(new LensflareElement(lens3, 100, 0.1));
     len.addElement(new LensflareElement(lens3, 160, 0.2));
     len.addElement(new LensflareElement(lens3, 100, 0.3));
-    pLight.add(len);
+    pointLight.add(len);
 
     // 直射赤道
     sunOrbit = new Spherical(2000, 66.6 * (Math.PI / 180), 0);
 
-    manager.scene.add(dirLight, ambiet, pLight);
+    manager.scene.add(dirLight, ambiet, pointLight);
 
     createAtmosphere();
 }
 
 function udpateLight(elapsed: number) {
-    if (!sunOrbit || !pLight || !dirLight) return;
+    if (!sunOrbit || !pointLight || !dirLight) return;
 
     sunOrbit.theta = elapsed * 0.5;
     const v = new Vector3();
     v.setFromSpherical(sunOrbit);
     // v.copy(manager.camera.position);
-    pLight.position.copy(v);
+    pointLight.position.copy(v);
     dirLight.position.copy(v);
 
-    uniforms.sunDir.value.copy(v.normalize());
+    uniforms.uSunDir.value.copy(v.normalize());
 }
 
 function createAtmosphere() {
-    const { radius } = meshBytesUtils.getHeader();
-
-    const earthGeometry = new SphereGeometry(radius, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
-
-    const atmo = new Mesh(
-        earthGeometry,
+    const atm = new Mesh(
+        new SphereGeometry(earthRadius, WIDTH_SEGMENTS, HEIGHT_SEGMENTS),
         new CustomShaderMaterial({
             baseMaterial: MeshPhongMaterial,
             // 技巧，显示背面，剔除正面
             side: BackSide,
             transparent: true,
             uniforms: uniforms,
-            vertexShader: /* glsl */ `
-                varying vec3 xNormal;
-                varying vec3 vPosition;
-
-                void main() {
-                    xNormal = normal;
-                    vPosition = csm_Position.xyz;
-                }
-            `,
-            fragmentShader: /* glsl */ `
-                varying vec3 xNormal;
-                varying vec3 vPosition;
-                uniform vec3 sunDir;
-                uniform vec3 atmoshpereDay;
-                uniform vec3 atmoshpereTwilight;
-
-                void main() {
-                    vec3 fnormal = normalize(xNormal);
-                    vec3 color = vec3(0.);
-                    // -1 ~1 方向反了
-                    float sunOrientation = dot(sunDir, fnormal);
-                
-                    // fresnel 菲涅尔
-                    vec3 viewDirection = normalize(vPosition - cameraPosition);
-                    // float fresnel = dot(viewDirection, fnormal) + 1.0;
-                    // fresnel = pow(fresnel, 2.0);
-                
-                    // atomoshpere
-                    float atMix = smoothstep(-0.5, 1.0, sunOrientation);
-                    vec3 aColor = mix(atmoshpereTwilight, atmoshpereDay, atMix);
-                    // color = mix(color, aColor, fresnel * atMix);
-                    color += aColor;
-
-                    // alpha
-                    float alpha = dot(viewDirection, fnormal);
-                    alpha = smoothstep(0.0, 0.5, alpha);
-
-                    float dayAlpha = smoothstep(-0.5, 0.0, sunOrientation);
-
-                    float finalAlpha = alpha * dayAlpha;
-                
-                    csm_DiffuseColor = vec4(color, finalAlpha);
-                }
-            `,
+            vertexShader: atmoVert,
+            fragmentShader: atmoFrag,
         })
     );
-    // 稍微放大
-    atmo.scale.set(1.06, 1.06, 1.06);
 
-    manager.scene.add(atmo);
+    // 稍微放大
+    atm.scale.set(1.06, 1.06, 1.06);
+
+    manager.scene.add(atm);
 }
 
 /** 注册canvas 事件 */
-// function registerCanvasEvent(canvas: HTMLCanvasElement) {}
+function registerCanvasEvent(canvas: HTMLCanvasElement) {}
 
 /** 预处理地块 */
 async function preprocessTiles() {
@@ -632,6 +579,7 @@ async function loadGlobalTexture() {
     image.onload = () => (texture.needsUpdate = true);
 
     globalTexture = texture;
+    uniforms.uTexture.value = globalTexture;
 }
 
 /**
@@ -641,7 +589,6 @@ async function loadGlobalTexture() {
  */
 async function drawAllZoneMesh() {
     await loadGlobalTexture();
-    uniforms.uTexture.value = globalTexture;
 
     let count = 0;
     const size = zoneTileIndicesMap.size;
@@ -689,8 +636,8 @@ async function drawAllZoneMesh() {
             // transparent: true,
             // wireframe: true,
             uniforms,
-            vertexShader: vertex,
-            fragmentShader: fragment,
+            vertexShader: tileVert,
+            fragmentShader: tileFrag,
         });
 
         const mesh = new Mesh(geo, mat);
@@ -1014,72 +961,8 @@ async function drawLayer() {
         // color: 0xff0000,
         // wireframe: true,
         uniforms: uniforms,
-        vertexShader: /* glsl */ `
-            attribute float colorMix;
-            varying float vColorMix;
-            varying vec3 xNormal;
-            varying vec3 vPosition;
-
-            void main() {
-                vColorMix = colorMix;
-                xNormal = normal;
-                vPosition = csm_Position.xyz;
-            }
-        `,
-        fragmentShader: /* glsl */ `
-            varying float vColorMix;
-            varying vec3 xNormal;
-            varying vec3 vPosition;
-            uniform vec3 sunDir;
-            uniform vec3 atmoshpereDay;
-            uniform vec3 atmoshpereTwilight;
-
-            void main() {
-                vec3 fnormal = normalize(xNormal);
-                vec3 color = vec3(0., 0., 1.);
-                float mix1 = smoothstep(-2.0, 0.1, vColorMix);
-                color = mix(color, vec3(0., 1., 0.), mix1);
-                float mix0 = step(2.1, vColorMix);
-                color = mix(color, vec3(0., 1.0, 0.5), mix0);
-                float mix2 = step(6.1, vColorMix);
-                color = mix(color, vec3(1., 1., 0.), mix2);
-                float mix3 = step(12.1, vColorMix);
-                color = mix(color, vec3(0.9), mix3);
-                float mix4 = step(18.1, vColorMix);
-                color = mix(color, vec3(1.0), mix4);
-
-                // vec3 night = color * 0.002;
-                vec3 night = color;
-                // -1 ~1 方向反了
-                float sunOrientation = dot(sunDir, fnormal);
-                float dayMix = smoothstep(-0.25, 0.5, sunOrientation);
-
-                // 纠正方向
-                color = mix(night, color, dayMix);
-
-                // fresnel 菲涅尔
-                vec3 viewDirection = normalize(vPosition - cameraPosition);
-                float fresnel = dot(viewDirection, fnormal) + 1.0;
-                fresnel = pow(fresnel, 2.0);
-
-                // atomoshpere
-                float atMix = smoothstep(-0.5, 1.0, sunOrientation);
-                vec3 aColor = mix(atmoshpereTwilight, atmoshpereDay, atMix);
-                color = mix(color, aColor, fresnel * atMix);
-
-                // specular
-                vec3 reflection = reflect(-sunDir, fnormal);
-                float specular1 = -dot(reflection, viewDirection);
-                specular1 = max(specular1, 0.);
-                specular1 = pow(specular1, 32.);
-
-                vec3 specularColor1 = mix(vec3(1.0), aColor, fresnel);
-
-                color += specular * specularColor1;
-
-                csm_DiffuseColor = vec4(color, 1.0);
-            }
-        `,
+        vertexShader: tileVert,
+        fragmentShader: tileFrag,
     });
 
     // 不需要base，不渲染，节省内存
@@ -1224,36 +1107,14 @@ export function createComplexTileGeometry(op: {
 
 function render() {
     manager.loop(() => {
-        // FPS = Math.round(1 / manager.getClock().getDelta());
-        // if (Date.now() % 5 === 0) {
-        //     // 减少计算
-        //     setFPS(FPS);
-        // }
         manager.resizeRendererToDisplaySize();
-
-        // getOrbitControls().update();
-
-        // setIsolatedLinesResolution();
-
-        // setLine2Resolution();
-
-        // setWaypointPathResolution();
-
-        // setSeaWaypointPathResolution();
-
-        // setCliffEdgesResolution();
-
-        // setRiverResolution();
-
-        // console.log(1000 / (performance.now() - time))
-        // time = performance.now()
 
         TWEEN.update();
 
         stats?.update();
 
         const elapsed = manager.getClock().getElapsedTime();
-        // time.value = manager.getClock().getElapsedTime();
+
         udpateLight(elapsed);
 
         manager.getRenderer().render(manager.scene, manager.camera);
@@ -1265,15 +1126,6 @@ export function cancelRender() {
     if (!manager) return;
 
     manager.loop(null);
-    // manager.scene.remove(mergedBorders);
-    // manager.scene.remove(mergedTiles);
-
-    // 这个暂时不销毁，留着复用
-    // (mergedTiles.material as MeshBasicMaterial).dispose();
-    // mergedTiles.geometry.dispose();
-    // (mergedBorders.material as MeshBasicMaterial).dispose();
-    // mergedBorders.geometry.dispose();
-
     manager.getRenderer().domElement.remove();
 }
 
@@ -1381,35 +1233,10 @@ async function drawVirtualZone() {
  * 这里会根据距离来调整旋转缩放的速度
  * @param needsZonesUpdate zones 是否需要更新 default = true
  */
-async function setControl(needsZonesUpdate = true) {
-    if (!manager) return;
-
+async function setChangedControl(needsZonesUpdate = true) {
+    if (!manager || !needsZonesUpdate) return;
     const pos = manager.camera.position;
-    // const dis = pos.length();
-    // const control = getOrbitControls();
-    // const { radius } = meshBytesUtils.getHeader();
-
-    // // control 的改变同样会影响 zoom
-    // let _zoom = MAX_ZOOM;
-
-    // while (_zoom > 0) {
-    //     if (dis - radius <= ZOOM_DIS.get(_zoom) * mapMultiple) {
-    //         zoom = _zoom;
-    //         break;
-    //     }
-    //     _zoom--;
-    // }
-
-    // 控制缩放的速度和旋转的速度
-    // const speed = ZOOM_SPEED.get(zoom) * mapMultiple;
-
-    // if (speed) {
-    //     control.rotateSpeed = speed;
-    //     control.zoomSpeed = speed * 2;
-    // }
-
-    if (!needsZonesUpdate) return;
-    // 需要更新分区
+    // 基于新位置需要更新分区
     const zone = getZoneByPoint(pos);
     await setZones({ [getZoneKey(zone)]: zone });
 }
@@ -1474,7 +1301,7 @@ export function setZoom(_zoom: number) {
     // zoom 的改变会影响 control
     // zoom 不涉及球体旋转，不使用球面插值动画
     manager.createCameraTween(position, des).onComplete(() => {
-        setControl();
+        setChangedControl();
     });
 }
 
@@ -1653,8 +1480,8 @@ async function drawZones(zones: GISZoneMap) {
         uniforms: {
             uTexture: { value: globalTexture },
         },
-        vertexShader: vertex,
-        fragmentShader: fragment,
+        vertexShader: tileVert,
+        fragmentShader: tileFrag,
     });
 
     curTileLayer = new Mesh(tilesGeo, tilesMat);

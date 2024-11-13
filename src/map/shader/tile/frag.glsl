@@ -4,14 +4,14 @@ uniform sampler2D uTexture;
 
 varying vec3 xNormal;
 varying vec3 vPosition;
-uniform vec3 sunDir;
-uniform vec3 atmoshpereDay;
-uniform vec3 atmoshpereTwilight;
+uniform vec3 uSunDir;
+uniform vec3 uAtmDay;
+uniform vec3 uAtmTwilight;
 
-uniform bool uShowPureColor;
+uniform bool uPureColor;
 
 void main() {
-    // 单位化
+    // 单位化插值过的法向量
     vec3 fnormal = normalize(xNormal);
 
     vec4 tColor = texture2D(uTexture, vUV);
@@ -35,14 +35,14 @@ void main() {
 
     // 混合纹理的颜色
     // color = color * tColor.rgb;
-    if(uShowPureColor == false) {
+    if(uPureColor == false) {
         color = tColor.rgb;
     }
 
     // vec3 night = color * 0.002;
     vec3 night = color * 0.2;
 
-    float sunOrientation = dot(sunDir, fnormal);
+    float sunOrientation = dot(uSunDir, fnormal);
     float dayMix = smoothstep(-0.25, 0.5, sunOrientation);
 
     // 纠正方向
@@ -55,8 +55,18 @@ void main() {
     // // fresnel = pow(fresnel, 10.0);
     // // atomoshpere
     // float atMix = smoothstep(-0.5, 1.0, sunOrientation);
-    // vec3 aColor = mix(atmoshpereTwilight, atmoshpereDay, atMix);
+    // vec3 aColor = mix(uAtmTwilight, uAtmDay, atMix);
     // color = mix(color, aColor, fresnel * atMix);
+
+    // specular
+    // vec3 reflection = reflect(-uSunDir, fnormal);
+    // float specular1 = -dot(reflection, viewDirection);
+    // specular1 = max(specular1, 0.);
+    // specular1 = pow(specular1, 32.);
+
+    // vec3 specularColor1 = mix(vec3(1.0), aColor, fresnel);
+
+    // color += specular * specularColor1;
 
     // csm_DiffuseColor = vec4(vUV.xy, 1.0, 1.0);
     csm_DiffuseColor = vec4(color, 1.0);
