@@ -126,7 +126,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
     _sphericalPan = new Spherical();
     _sphericalPanDelta = new Spherical();
 
-    _isTiltZoom = false;
+    _isCameraTilt = false;
     /** 相机倾斜phi */
     _tiltPhiAngle = 0;
     /** 相机垂直地面的倾角*/
@@ -162,6 +162,9 @@ export class SphereOrbitControls extends Controls<EventMap> {
     _pointerPositions: Record<number, Vector2> = {};
 
     _controlActive = false;
+
+    _needsRotateCameraTheta = true;
+    _needsRotateBackCameraTheta = true;
 
     declare object: PerspectiveCamera | OrthographicCamera;
     declare domElement: HTMLCanvasElement;
@@ -465,16 +468,26 @@ export class SphereOrbitControls extends Controls<EventMap> {
         this.target.clampLength(this.minTargetRadius, this.maxTargetRadius);
         this.target.add(this.cursor);
 
-        this.object.up.set(0, 1, 0)
-        if (this.enableZoom && this._isTiltZoom) {
+        // 低高度下修正相机倾角
+        this.object.up.set(0, 1, 0);
+        if (this.enableZoom && this._isCameraTilt) {
             if (this._tiltPhiAngle > Math.PI) {
                 this._spherical.phi = _twoPI - this._tiltPhiAngle;
                 // 并把theta旋转pi
-                this._spherical.theta += Math.PI;
+                if (this._needsRotateCameraTheta) {
+                    this._spherical.theta += Math.PI;
+                    this._needsRotateCameraTheta = false
+                    this._needsRotateBackCameraTheta = true
+                }
                 // 相机反向
-                this.object.up.set(0, -1, 0)
+                this.object.up.set(0, -1, 0);
             } else {
                 this._spherical.phi = this._tiltPhiAngle;
+                if (this.target.y < 0 && this._needsRotateBackCameraTheta) {
+                    this._spherical.theta += Math.PI;
+                    this._needsRotateBackCameraTheta = false
+                    this._needsRotateCameraTheta = true
+                }
             }
         }
 
@@ -496,7 +509,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
 
         position.copy(this.target).add(_v);
 
-        // 球面平移
+        // 低高度下的球面平移
         if (this.enablePan && this.state === CONTROL_STATE.PAN) {
             const length = this.target.distanceTo(position);
             this.target.setFromSpherical(this._sphericalPan);
@@ -984,17 +997,21 @@ export class SphereOrbitControls extends Controls<EventMap> {
     /**
      * @param angle 相机和地面垂直轴的夹角
      */
-    setCameraAngle(angle: number) {
+    setCameraOrthTiltAngle(angle: number) {
         const n = this.target.clone().normalize();
         // 在北半球 0< a < PI/2
         // 在南半球 pi/2 < a < pi
-        const a = n.angleTo(new Vector3(0, 1, 0));
-        this._tiltPhiAngle = angle + a;
+        const phi = n.angleTo(new Vector3(0, 1, 0));
+        this._tiltPhiAngle = angle + phi;
         this._tiltOrthAngle = angle;
     }
 
-    setIsTiltZoom(tileZoom: boolean) {
-        this._isTiltZoom = tileZoom;
+    setIsTiltZoom(isTilt: boolean) {
+        this._isCameraTilt = isTilt;
+        if (!isTilt) {
+            this._needsRotateCameraTheta = true
+            this._needsRotateBackCameraTheta = false
+        }
     }
 
     setMaxCameraAngle(angle: number) {

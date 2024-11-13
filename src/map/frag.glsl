@@ -39,7 +39,8 @@ void main() {
         color = tColor.rgb;
     }
 
-    vec3 night = color * 0.002;
+    // vec3 night = color * 0.002;
+    vec3 night = color * 0.2;
 
     float sunOrientation = dot(sunDir, fnormal);
     float dayMix = smoothstep(-0.25, 0.5, sunOrientation);

@@ -165,12 +165,14 @@ let sunOrbit: Spherical = null;
 let dirLight: DirectionalLight = null;
 let pLight: PointLight = null;
 
+let testBall: Mesh = null;
+
 const uniforms = {
     sunDir: new Uniform(new Vector3(0, 0, 1)),
     atmoshpereDay: new Uniform(new Color("#00aaff")),
     atmoshpereTwilight: new Uniform(new Color("#ff6600")),
     uTexture: new Uniform<Texture>(null),
-    uShowPureColor: new Uniform(true)
+    uShowPureColor: new Uniform(true),
 };
 
 export async function initMap() {
@@ -226,11 +228,26 @@ export async function initMap() {
 
     await drawAllZoneMesh();
 
+    createTestBall();
+
     // await drawLayer();
 
     // await drawVirtualZone();
 
     mapInitStatus.loadPercent = 100;
+}
+
+function createTestBall() {
+    if (testBall) return;
+
+    testBall = new Mesh(
+        new SphereGeometry(10, 10, 10),
+        new MeshPhongMaterial({
+            color: "blue",
+        })
+    );
+
+    manager.scene.add(testBall);
 }
 
 /** 初始化相机 */
@@ -266,49 +283,57 @@ function cameraControlChanging() {
     controlChanging = true;
     needsUpdateWhenControlChanging();
 
-    setTiltAngle();
+    setTiltCamera();
 }
 
-function setTiltAngle() {
+function setTiltCamera() {
     const controls = getOrbitControls();
     const minDis = ZOOM_DIS.get(EDIT_ZOOM);
     const pos = manager.camera.position;
     const dis = pos.length() - earthRadius;
 
     if (dis < minDis) {
+        const angle =
+            controls._tiltMaxAngle * (1 - (dis - CAMEARA_TO_EARTH_MIN_DIS) / (minDis - CAMEARA_TO_EARTH_MIN_DIS));
+
         if (!isLowHeight) {
             controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS;
             controls.target.copy(pos.clone().normalize().multiplyScalar(earthRadius));
             controls.setIsTiltZoom(true);
+
             controls.enablePan = true;
             controls.enableRotate = false;
             controls.mouseButtons = {
                 LEFT: MOUSE.PAN,
             };
-            isLowHeight = true;
-            controls.update();
 
-            uniforms.uShowPureColor.value = false
+            isLowHeight = true;
+            uniforms.uShowPureColor.value = false;
+
+            testBall?.position.copy(controls.target);
+
+            // 重要，更新前更新倾角
+            controls.setCameraOrthTiltAngle(angle);
+
+            controls.update();
         }
 
-        const angle =
-            controls._tiltMaxAngle * (1 - (dis - CAMEARA_TO_EARTH_MIN_DIS) / (minDis - CAMEARA_TO_EARTH_MIN_DIS));
-
-        controls.setCameraAngle(angle);
-        // controls.update();
+        controls.setCameraOrthTiltAngle(angle);
     } else {
         if (isLowHeight) {
             controls.target.copy(new Vector3(0, 0, 0));
             controls.setIsTiltZoom(false);
+
             controls.enablePan = false;
             controls.enableRotate = true;
             controls.mouseButtons = {
                 LEFT: MOUSE.ROTATE,
             };
-            isLowHeight = false;
-            controls.update();
 
-            uniforms.uShowPureColor.value = true
+            isLowHeight = false;
+            uniforms.uShowPureColor.value = true;
+
+            controls.update();
         }
     }
 }
@@ -593,7 +618,7 @@ function getTileUV(tileIndex: number) {
 
     uvs.push(...lerpUV);
 
-    return uvs
+    return uvs;
 }
 
 async function loadGlobalTexture() {
@@ -609,17 +634,17 @@ async function loadGlobalTexture() {
     globalTexture = texture;
 }
 
-/** 
+/**
  * 渲染所有分区对应的网格，这种比merge geometry 更实惠
- * 
+ *
  * 占据更少的内存，但会多一些drawcall
  */
 async function drawAllZoneMesh() {
     await loadGlobalTexture();
-    uniforms.uTexture.value = globalTexture
+    uniforms.uTexture.value = globalTexture;
 
     let count = 0;
-    const size = zoneTileIndicesMap.size
+    const size = zoneTileIndicesMap.size;
 
     for (const [zone, tiles] of zoneTileIndicesMap) {
         const geoArr: BufferGeometry[] = [];
@@ -638,7 +663,7 @@ async function drawAllZoneMesh() {
                 };
             });
 
-            const uvs = getTileUV(index)
+            const uvs = getTileUV(index);
             // tileIndexUVMap.set(index, uvs)
 
             const color = randomColor();
@@ -652,7 +677,7 @@ async function drawAllZoneMesh() {
                     waterElevation,
                     type,
                     tileIndex: index,
-                    uvs
+                    uvs,
                 })
             );
         }
@@ -678,7 +703,7 @@ async function drawAllZoneMesh() {
             await sleep(0);
         }
 
-        count++
+        count++;
     }
 }
 
@@ -1129,7 +1154,7 @@ export function createComplexTileGeometry(op: {
     elevation?: number;
     waterElevation?: number;
     type?: number;
-    uvs?: number[]
+    uvs?: number[];
 }) {
     const geometry = new BufferGeometry();
     const points: number[] = [];
@@ -1474,7 +1499,7 @@ export function isClickCanvas() {
  * @param pos 相机移动到的位置
  */
 export async function setZones(zones: GISZoneMap, pos?: Vector3) {
-    return
+    return;
     if (zoom < EDIT_ZOOM) {
         beforeZonesChange();
 
