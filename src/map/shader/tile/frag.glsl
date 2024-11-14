@@ -45,8 +45,8 @@ void main() {
     float sunOrientation = dot(uSunDir, fnormal);
     float dayMix = smoothstep(-0.25, 0.5, sunOrientation);
 
-    // 纠正方向
-    color = mix(night, color, dayMix);
+    // 昼夜更替效果
+    // color = mix(night, color, dayMix);
 
     // fresnel 菲涅尔，贴近地面时具有更好的发光效果
     // vec3 viewDirection = normalize(vPosition - cameraPosition);

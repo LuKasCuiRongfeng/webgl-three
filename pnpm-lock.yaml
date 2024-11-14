@@ -36,8 +36,8 @@ dependencies:
     specifier: ^6.1.1
     version: 6.1.1(react@18.3.1)(three@0.170.0)
   three-mesh-bvh:
-    specifier: ^0.8.2
-    version: 0.8.2(three@0.170.0)
+    specifier: ^0.8.3
+    version: 0.8.3(three@0.170.0)
 
 devDependencies:
   '@tauri-apps/cli':
@@ -1280,8 +1280,8 @@ packages:
       three: 0.170.0
     dev: false
 
-  /three-mesh-bvh@0.8.2(three@0.170.0):
-    resolution: {integrity: sha512-AgzhAicMVLOJKU7i7ERzLT7A27vqnWThenOm8elljOh9tyz+yffOVzlZReYBtL3G/of3W2mPbsaDA2B7UzZR5g==}
+  /three-mesh-bvh@0.8.3(three@0.170.0):
+    resolution: {integrity: sha512-4G5lBaF+g2auKX3P0yqx+MJC6oVt6sB5k+CchS6Ob0qvH0YIhuUk1eYr7ktsIpY+albCqE80/FVQGV190PmiAg==}
     peerDependencies:
       three: '>= 0.159.0'
     dependencies:

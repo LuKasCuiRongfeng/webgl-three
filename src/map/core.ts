@@ -31,6 +31,8 @@ import ThreeManager, {
     Matrix4,
     Quaternion,
     MeshBasicMaterial,
+    Group,
+    MeshBVH,
 } from "./three-manager";
 import { getBytesUtils, readFileBase64, sleep } from "./utils";
 import { LL2TID } from "./LL2TID";
@@ -116,6 +118,8 @@ const zoneTileIndicesMap: GISZoneTileIndicesMap = new Map();
 
 const zoneMeshMap: Map<string, Mesh> = new Map();
 
+const zoneMeshGroup = new Group();
+
 /** 当前分区 tileindex -> vertex[] */
 const curTileVertexIndexMap: Map<number, number[]> = new Map();
 
@@ -173,6 +177,8 @@ let sunOrbit: Spherical = null;
 let dirLight: DirectionalLight = null;
 /** 点光，用于光斑形成 */
 let pointLight: PointLight = null;
+
+let isPointerDown = false;
 
 /** uniform 变量，将传入到shader里 */
 const uniforms = {
@@ -233,7 +239,7 @@ export async function initMap() {
 
     createLight();
 
-    // registerCanvasEvent(manager.getRenderer().domElement);
+    onCanvasEvent(manager.getRenderer().domElement);
 
     // await preprocessInstanceTiles();
 
@@ -385,8 +391,8 @@ function createEarth() {
 }
 
 function createLight() {
-    dirLight = new DirectionalLight(0xffffff, 1);
-    const ambiet = new AmbientLight(0xffffff, 1);
+    dirLight = new DirectionalLight(0xffffff, 2);
+    const ambiet = new AmbientLight(0xffffff, 2);
     dirLight.position.copy(manager.camera.position);
 
     // 光晕
@@ -394,7 +400,7 @@ function createLight() {
     const lens0 = loader.load(lensflare0);
     const lens3 = loader.load(lensflare3);
 
-    pointLight = new PointLight(0xffffff, 1, 2000, 0);
+    pointLight = new PointLight(0xffffff, 2, 2000, 0);
     pointLight.color.setHSL(0.995, 0.5, 0.9);
     pointLight.position.copy(manager.camera.position);
 
@@ -405,7 +411,7 @@ function createLight() {
     len.addElement(new LensflareElement(lens3, 100, 0.3));
     pointLight.add(len);
 
-    // 直射赤道
+    // 直射北回归线
     sunOrbit = new Spherical(2000, 66.6 * (Math.PI / 180), 0);
 
     manager.scene.add(dirLight, ambiet, pointLight);
@@ -418,8 +424,10 @@ function udpateLight(elapsed: number) {
 
     sunOrbit.theta = elapsed * 0.5;
     const v = new Vector3();
-    v.setFromSpherical(sunOrbit);
-    // v.copy(manager.camera.position);
+    // 使用轨道位置
+    // v.setFromSpherical(sunOrbit);
+    // 使用相机位置，保证始终朝向灯光
+    v.copy(manager.camera.position);
     pointLight.position.copy(v);
     dirLight.position.copy(v);
 
@@ -446,8 +454,42 @@ function createAtmosphere() {
     manager.scene.add(atm);
 }
 
-/** 注册canvas 事件 */
-function registerCanvasEvent(canvas: HTMLCanvasElement) {}
+/** 监听canvas 事件 */
+function onCanvasEvent(canvas: HTMLCanvasElement) {
+    canvas.addEventListener("pointerdown", pointerDown);
+    canvas.addEventListener("pointermove", pointerMove);
+    canvas.addEventListener("pointerup", pointerUp);
+}
+
+function pointerDown(e: PointerEvent) {
+    isPointerDown = true;
+
+    mapClickStartTime = performance.now();
+    const pos = manager.getCanvasRP(e);
+    mapClickStartPos.x = pos.x;
+    mapClickStartPos.y = pos.y;
+}
+
+function pointerMove(e: PointerEvent) {
+    getLatlng(e);
+}
+
+function pointerUp(e: PointerEvent) {
+    isPointerDown = false;
+}
+
+function getLatlng(e: PointerEvent) {
+    return
+    const ndc = manager.getCanvasNP(e);
+    const intersect = manager.picker([zoneMeshGroup], ndc, true);
+    if (intersect == null) return;
+    const point = intersect.point;
+    // const point = manager.getIntersectOfRay(earthRadius, ndc);
+    if (!point) return;
+
+    const latlng = manager.vector3ToLatLng(point);
+    const tileIndex = getLL2TID().LLConvertPos(-latlng.lng, latlng.lat);
+}
 
 /** 预处理地块 */
 async function preprocessTiles() {
@@ -565,6 +607,8 @@ async function loadGlobalTexture() {
 async function drawAllZoneMesh() {
     await loadGlobalTexture();
 
+    manager.scene.add(zoneMeshGroup);
+
     let count = 0;
     const size = zoneTileIndicesMap.size;
 
@@ -605,6 +649,8 @@ async function drawAllZoneMesh() {
         }
 
         const geo = BufferGeometryUtils.mergeGeometries(geoArr, false);
+        geo.boundsTree = new MeshBVH(geo);
+
         const mat = new CustomShaderMaterial({
             baseMaterial: MeshPhongMaterial,
             // vertexColors: true,
@@ -616,8 +662,36 @@ async function drawAllZoneMesh() {
         });
 
         const mesh = new Mesh(geo, mat);
-        manager.scene.add(mesh);
+        zoneMeshGroup.add(mesh);
         zoneMeshMap.set(zone, mesh);
+
+        {
+            // 更新顶点
+            // 选择在这里更新顶点而不是着色器，是因为
+            // raycast只认geometry的顶点，我操
+            const posAttr = geo.getAttribute("position");
+            const noramlAttr = geo.getAttribute("normal");
+            const colorMixAttr = geo.getAttribute("colorMix");
+            const vertCount = posAttr.count;
+            for (let i = 0; i < vertCount; i++) {
+                let colorMix = colorMixAttr.getX(i);
+                if (colorMix < 0.001) colorMix = 0;
+
+                const x = posAttr.getX(i) + colorMix * noramlAttr.getX(i);
+                const y = posAttr.getY(i) + colorMix * noramlAttr.getY(i);
+                const z = posAttr.getZ(i) + colorMix * noramlAttr.getZ(i);
+
+                posAttr.setX(i, x);
+                posAttr.setY(i, y);
+                posAttr.setZ(i, z);
+            }
+
+            posAttr.needsUpdate = true;
+
+            // 重新生成geometry顶点后必须重新构建bvh，否则不能
+            // 获得正确的射线交点
+            geo.boundsTree = new MeshBVH(geo);
+        }
 
         if (count % 1 === 0) {
             const per = Math.round((count / size) * 100);
@@ -1042,15 +1116,20 @@ export function createComplexTileGeometry(op: {
     // 加上中心
     vertices.push(center);
 
+    const diff = elevation - waterElevation;
+
     vertices.forEach((v, i) => {
         const { x, y, z } = v;
         points.push(x, y, z);
-        // colors.push(...color);
-        colorMix.push(elevation - waterElevation);
+        colorMix.push(diff);
+        // const noraml = new Vector3(x, y, z).normalize();
 
         if (i < count) {
+            // points.push(x, y, z);
             elevations.push(0);
         } else {
+            // 修改顶点
+            // points.push(x + diff * noraml.x, y + diff * noraml.y, z + noraml.z);
             elevations.push(elevation);
         }
     });

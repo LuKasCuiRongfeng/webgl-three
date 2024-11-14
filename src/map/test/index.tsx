@@ -21,8 +21,10 @@ import {
     PerspectiveCamera,
     PlaneGeometry,
     Quaternion,
+    Raycaster,
     Scene,
     SphereGeometry,
+    Vector2,
     Vector3,
     WebGLRenderer,
 } from "three";
@@ -33,11 +35,20 @@ import vert from "./vert.glsl";
 import frag from "./frag.glsl";
 import { MeshPhongNodeMaterial } from "three/webgpu";
 
-import { SphereOrbitControlsBack } from "../orbit"
+import { SphereOrbitControlsBack } from "../orbit";
+import { MeshBVH } from "three-mesh-bvh";
 
 const min_dis = 30;
 
 let low_height = false;
+
+const rayCaster = new Raycaster();
+
+let camera: PerspectiveCamera = null;
+
+let scene: Scene = null;
+
+let plane: Mesh = null;
 
 export default function Test() {
     const canvasRef = useRef<HTMLCanvasElement>();
@@ -50,9 +61,26 @@ export default function Test() {
         //     canvas.setPointerCapture(e.pointerId)
         //     console.log(e.pointerId, e.pointerType);
         // });
-        // canvas.addEventListener("pointermove", (e) => {
-        //     console.log(e.pointerId, e.pointerType);
-        // });
+        canvas.addEventListener("pointermove", (event) => {
+            if (!camera || !plane) return
+            const rect = canvas.getBoundingClientRect();
+
+            const x = ((event.clientX - rect.left) * canvas.width) / rect.width;
+            const y = ((event.clientY - rect.top) * canvas.height) / rect.height;
+
+            const ndc = {
+                x: (x / canvas.width) * 2 - 1,
+                y: (y / canvas.height) * -2 + 1,
+            };
+
+            rayCaster.setFromCamera(new Vector2(ndc.x, ndc.y), camera)
+
+            const objs = rayCaster.intersectObject(plane, true)
+            if (objs.length > 0) {
+                const o = objs[0]
+                console.log(o.point)
+            }
+        });
         // canvas.addEventListener("pointerup", (e) => {
         //     console.log(e.pointerId, e.pointerType);
         // });
@@ -61,13 +89,13 @@ export default function Test() {
     const run = () => {
         const canvas = canvasRef.current;
         const renderer = new WebGLRenderer({ antialias: true, canvas });
-        const scene = new Scene();
+        scene = new Scene();
 
-        const camera = new PerspectiveCamera(75, 1.5, 0.1, 500);
+        camera = new PerspectiveCamera(75, 1.5, 0.1, 500);
         camera.position.set(0, 0, 50);
         const controls = new SphereOrbitControlsBack(camera, canvas);
         controls.enableDamping = false;
-        controls.screenSpacePanning = false
+        controls.screenSpacePanning = false;
         // controls.maxPolarAngle = Math.PI / 2;
         // controls.enablePan = false;
 
@@ -79,24 +107,51 @@ export default function Test() {
         const axis = new AxesHelper(15);
         scene.add(axis);
 
-        const box = new Mesh(new BoxGeometry(10, 10, 10), new MeshPhongMaterial({ color: 0x00ff00 }));
-        scene.add(box);
-        box.add(axis.clone());
-        box.translateX(10);
+        const planeGeo = new PlaneGeometry(5, 5, 10, 10);
+        const elevations: number[] = [];
+        const count = planeGeo.getAttribute("position").count;
+        for (let i = 0; i < count; i++) {
+            elevations.push(Math.random() * 2);
+        }
+        planeGeo.setAttribute("elevation", new Float32BufferAttribute(elevations, 1));
 
-        const sphere = new Mesh(new IcosahedronGeometry(10), new MeshPhongMaterial({ color: 0xff0000 }))
-        scene.add(sphere)
+        planeGeo.boundsTree = new MeshBVH(planeGeo)
 
-        // controls.target.set(0, 10, 0)
-        controls.minPolarAngle = 0
-        controls.maxPolarAngle = Math.PI / 2
-        controls.minAzimuthAngle = 0
-        controls.maxAzimuthAngle = 0
-        controls.update()
+        plane = new Mesh(
+            planeGeo,
+            new CustomShaderMaterial({
+                baseMaterial: MeshPhongMaterial,
+                color: 0x00ff00,
+                // wireframe: true,
+                vertexShader: /* glsl */ `
+                attribute float elevation;
+                void main() {
+                    csm_Position.xyz += normal * elevation;
+                }
+            `,
+            })
+        );
+        plane.position.x = 10
+        scene.add(plane);
 
-        controls.addEventListener("end", () => {
-            console.log(controls.target.toArray())
-        })
+        // const box = new Mesh(new BoxGeometry(10, 10, 10), new MeshPhongMaterial({ color: 0x00ff00 }));
+        // scene.add(box);
+        // box.add(axis.clone());
+        // box.translateX(10);
+
+        // const sphere = new Mesh(new IcosahedronGeometry(10), new MeshPhongMaterial({ color: 0xff0000 }))
+        // scene.add(sphere)
+
+        // // controls.target.set(0, 10, 0)
+        // controls.minPolarAngle = 0
+        // controls.maxPolarAngle = Math.PI / 2
+        // controls.minAzimuthAngle = 0
+        // controls.maxAzimuthAngle = 0
+        // controls.update()
+
+        // controls.addEventListener("end", () => {
+        //     console.log(controls.target.toArray())
+        // })
 
         // setTimeout(() => {
         //     const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4);
