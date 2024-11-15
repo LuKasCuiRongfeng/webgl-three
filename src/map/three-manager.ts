@@ -86,6 +86,9 @@ import {
     Uniform,
     Float32BufferAttribute,
     PointLight,
+    DataTexture,
+    RGBAFormat,
+    FloatType
 } from "three";
 
 // import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -107,10 +110,10 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { ImprovedNoise } from "three/examples/jsm/math/ImprovedNoise.js";
-import { Lensflare, LensflareElement } from "three/addons/objects/lensflare.js"
-import Stats from "three/addons/libs/stats.module.js"
+import { Lensflare, LensflareElement } from "three/addons/objects/lensflare.js";
+import Stats from "three/addons/libs/stats.module.js";
 
-import CustomShaderMaterial from "three-custom-shader-material/vanilla"
+import CustomShaderMaterial from "three-custom-shader-material/vanilla";
 
 import { SphereOrbitControls } from "./sphereOrbit";
 // ----------------------------------------------------
@@ -408,31 +411,30 @@ class ThreeManager {
     }
 
     /** 鼠标拾取目标 */
-    picker(objs: Object3D[], np: Coordinate2D, recursive?: boolean) {
+    rayPicker(objs: Object3D[], ndc: Coordinate2D, recursive?: boolean) {
         if (!this.rayCaster) {
             this.rayCaster = new Raycaster();
+            // 性能考虑
             this.rayCaster.firstHitOnly = true;
         }
 
         // 增加鼠标中心缩放
-        this.rayCaster.setFromCamera(new Vector2(np.x, np.y), this.camera);
+        this.rayCaster.setFromCamera(new Vector2(ndc.x, ndc.y), this.camera);
+        const interObjs = this.rayCaster.intersectObjects(objs, recursive);
 
-        const _objs = this.rayCaster.intersectObjects(objs, recursive);
-
-        if (_objs.length > 0) {
-            return _objs[0];
+        if (interObjs.length > 0) {
+            return interObjs[0];
         }
-        return null;
     }
 
-    /** 获取射线 */
-    getCastRay(np: Coordinate2D) {
+    /** 获取从相机到点的射线 */
+    getCameraCastRay(ndc: Coordinate2D) {
         if (!this.rayCaster) {
             this.rayCaster = new Raycaster();
             this.rayCaster.firstHitOnly = true;
         }
         // 增加鼠标中心缩放
-        this.rayCaster.setFromCamera(new Vector2(np.x, np.y), this.camera);
+        this.rayCaster.setFromCamera(new Vector2(ndc.x, ndc.y), this.camera);
         return this.rayCaster.ray;
     }
 
@@ -442,8 +444,8 @@ class ThreeManager {
      * 必相交，不考虑
      * 参考 [射线相交数学计算](https://zhuanlan.zhihu.com/p/136763389)
      */
-    getIntersectOfRay(radius: number, np: Coordinate2D) {
-        const ray = this.getCastRay(np);
+    getIntersectOfRay(radius: number, ndc: Coordinate2D) {
+        const ray = this.getCameraCastRay(ndc);
         if (!ray) return;
         const { origin, direction } = ray;
         // (0, 0, 0) - origin
@@ -470,25 +472,25 @@ class ThreeManager {
     }
 
     /** 获取屏幕坐标 */
-    getCanvasRP(event: PointerEvent | MouseEvent) {
+    getCanvasScreenSpace(e: PointerEvent) {
         const canvas = this.renderer.domElement;
         const rect = canvas.getBoundingClientRect();
+
         return {
-            x: ((event.clientX - rect.left) * canvas.width) / rect.width,
-            y: ((event.clientY - rect.top) * canvas.height) / rect.height,
+            x: ((e.clientX - rect.left) * canvas.width) / rect.width,
+            y: ((e.clientY - rect.top) * canvas.height) / rect.height,
         };
     }
 
-    /** 获取设备坐标 */
-    getCanvasNP(event: PointerEvent | MouseEvent) {
-        const rp = this.getCanvasRP(event);
-
-        return this.rpToNP(rp);
+    /** 获取标准设备坐标 */
+    getCanvasNDC(event: PointerEvent) {
+        const ss = this.getCanvasScreenSpace(event);
+        return this.screenSpaceToNDC(ss);
     }
 
-    /** 屏幕坐标转设备坐标 */
-    rpToNP(rp: Coordinate2D) {
-        const { x, y } = rp;
+    /** 屏幕坐标转标准设备坐标 */
+    screenSpaceToNDC(ss: Coordinate2D) {
+        const { x, y } = ss;
         const canvas = this.renderer.domElement;
 
         return {
@@ -498,25 +500,22 @@ class ThreeManager {
     }
 
     /** 标准设备坐标转世界坐标 */
-    npToWP(np: Coordinate2D) {
+    ndcToWorldSpace(ndc: Coordinate2D) {
         // 0.5 是业界比较通用的 2d转3d的深度值
-        const v3 = new Vector3(np.x, np.y, 0.5);
-
+        const v3 = new Vector3(ndc.x, ndc.y, 0.5);
         return v3.unproject(this.camera);
     }
 
     /** 世界坐标转标准设备坐标 */
-    wpToNP(v: Vector3) {
+    worldSpaceToNDC(v: Vector3) {
         // 得到设备坐标系，先克隆，投影会改变原向量
         const { x, y, z } = v.clone().project(this.camera);
-
         return { x, y, z };
     }
 
     /** 设备坐标转屏幕坐标 */
-    npToRP(v: Coordinate2D | Coordinate) {
+    ndcToScreenSpace(v: Coordinate2D | Coordinate) {
         const canvas = this.renderer.domElement;
-
         return {
             x: ((v.x + 1) / 2) * canvas.width,
             y: ((v.y - 1) / -2) * canvas.height,
@@ -524,7 +523,7 @@ class ThreeManager {
     }
 
     /** 返回与 dir 同方向的长度为length的向量 */
-    calcCollinearVector(dir: Vector3, length: number) {
+    getCollinearVector(dir: Vector3, length: number) {
         return dir.clone().normalize().multiplyScalar(length);
     }
 
@@ -712,5 +711,8 @@ export {
     SphereOrbitControls,
     Lensflare,
     LensflareElement,
-    PointLight
+    PointLight,
+    DataTexture,
+    RGBAFormat,
+    FloatType
 };

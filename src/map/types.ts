@@ -77,3 +77,26 @@ export type GISZoneFacesMap = Map<GISZoneKey, number[]>;
 
 /** 映射每个分区的合并边界 */
 export type GISZoneBordersMap = Map<GISZoneKey, LineSegments>;
+
+export type CommonStatus = {
+    typeUUID?: string;
+    initUUID?: string;
+    /** 对于没有 uuid的，作为备选 */
+    selectedId?: number;
+    isEdit?: boolean;
+    radius?: number;
+    /** 用作基础数据，比如海拔值，水面高度值 */
+    value?: number;
+    isDelete?: boolean;
+    isAdd?: boolean;
+};
+
+/** 定义图层样式 */
+export type LayerStyle = {
+    /** 遮罩颜色 */
+    color?: XColor;
+    /** 线颜色，16进制数字 */
+    lineColor?: number;
+    /** 线宽，大于0 有效 */
+    lineWidth?: number;
+};

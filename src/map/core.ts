@@ -33,6 +33,9 @@ import ThreeManager, {
     MeshBasicMaterial,
     Group,
     MeshBVH,
+    DataTexture,
+    RGBAFormat,
+    FloatType,
 } from "./three-manager";
 import { getBytesUtils, readFileBase64, sleep } from "./utils";
 import { LL2TID } from "./LL2TID";
@@ -62,7 +65,17 @@ import {
     ZOOM_DIS,
     ZOOM_SPEED,
 } from "./consts";
-import { Coordinate, GISZone, GISZoneMap, GISZoneTileIndicesMap, MapInitStatus, UV, XColor } from "./types";
+import {
+    Coordinate,
+    Coordinate2D,
+    GISZone,
+    GISZoneMap,
+    GISZoneTileIndicesMap,
+    LayerStyle,
+    MapInitStatus,
+    UV,
+    XColor,
+} from "./types";
 
 import tileFrag from "./shader/tile/frag.glsl";
 import tileVert from "./shader/tile/vert.glsl";
@@ -73,6 +86,7 @@ import { isEqual, throttle } from "lodash-es";
 // import { CONTROL_STATE } from "./sphereOrbit";
 import lensflare0 from "../assets/lensflare0.png";
 import lensflare3 from "../assets/lensflare3.png";
+import { elevationPointerDown, elevationPointerMove } from "./elevation";
 
 /** 操作地图数据的对象 */
 let mapBytesUtils: MapBytesUtils = null;
@@ -119,6 +133,12 @@ const zoneTileIndicesMap: GISZoneTileIndicesMap = new Map();
 const zoneMeshMap: Map<string, Mesh> = new Map();
 
 const zoneMeshGroup = new Group();
+
+/** 所有tileIdnex -> vertex[] */
+const zoneMeshTileVertexMap: Map<number, number[]> = new Map();
+
+/** tileIndex -> zone string */
+const tileZoneMap: Map<number, string> = new Map();
 
 /** 当前分区 tileindex -> vertex[] */
 const curTileVertexIndexMap: Map<number, number[]> = new Map();
@@ -180,6 +200,9 @@ let pointLight: PointLight = null;
 
 let isPointerDown = false;
 
+/** 是否需要恢复 control */
+let needsResetControl = false;
+
 /** uniform 变量，将传入到shader里 */
 const uniforms = {
     /** 光源方向 */
@@ -192,7 +215,21 @@ const uniforms = {
     uTexture: new Uniform<Texture>(null),
     /** 是否使用纯色着色，忽略纹理 */
     uPureColor: new Uniform(true),
+    /** 鼠标模式，-1 无， 0 海拔 */
+    uMouseMode: new Uniform(-1),
+    /** tile count，shader里不支持动态循环变量，使用uniform传入 */
+    uTileCount: new Uniform(0),
+    /** 存放 hover tile 数据 */
+    uDataTexture: new Uniform<DataTexture>(null),
 };
+
+export const DataTextureConfig = {
+    /** 每行4个 rgba， 第一个值存tileid，
+     * 第二个值存edge数量，之后存13个(五边形是11个)顶点
+     * 总共需要15个float，所以需要4个 rgba共16个
+    */
+    width: 4
+}
 
 export async function initMap() {
     if (haveInitialed) {
@@ -275,7 +312,7 @@ function createCamerea() {
     control.minDistance = radius + CAMEARA_TO_EARTH_MIN_DIS;
 
     control.mouseButtons = {
-        LEFT: MOUSE.ROTATE,
+        RIGHT: MOUSE.ROTATE,
     };
 
     setChangedControl(false);
@@ -308,7 +345,7 @@ function setTiltCamera() {
             controls.enablePan = true;
             controls.enableRotate = false;
             controls.mouseButtons = {
-                LEFT: MOUSE.PAN,
+                RIGHT: MOUSE.PAN,
             };
 
             isLowHeight = true;
@@ -329,7 +366,7 @@ function setTiltCamera() {
             controls.enablePan = false;
             controls.enableRotate = true;
             controls.mouseButtons = {
-                LEFT: MOUSE.ROTATE,
+                RIGHT: MOUSE.ROTATE,
             };
 
             isLowHeight = false;
@@ -367,6 +404,28 @@ function registerControlEvent() {
 /** 获取经纬度转 tileindex 工具 */
 export function getLL2TID() {
     return LL2TID;
+}
+
+export function getManager() {
+    return manager;
+}
+
+export function banControl() {
+    const control = getOrbitControls();
+
+    control.enableZoom = false;
+    control.enablePan = false;
+    needsResetControl = true;
+}
+
+/** 恢复控件 */
+export function resetControl(force?: boolean) {
+    if (!needsResetControl && !force) return;
+
+    const control = getOrbitControls();
+
+    control.enableZoom = true;
+    control.enablePan = true;
 }
 
 /** 拿到 二进制数据文件 处理对象 */
@@ -461,17 +520,52 @@ function onCanvasEvent(canvas: HTMLCanvasElement) {
     canvas.addEventListener("pointerup", pointerUp);
 }
 
+/** 基于广度优先搜索迭代层级 */
+export function traverseTileBFS(level: number, tileIndex: number) {
+    const visited: Set<number> = new Set();
+    const queue = [tileIndex];
+    let step = 0;
+    const result: number[][] = [];
+
+    while (queue.length > 0 && step < level) {
+        const size = queue.length;
+        result[step] = [];
+
+        for (let i = 0; i < size; i++) {
+            const index = queue.shift();
+
+            if (!visited.has(index)) {
+                visited.add(index);
+                result[step].push(index);
+
+                const { tiles } = meshBytesUtils.getTileByIndex(index);
+                queue.push(...tiles);
+            }
+        }
+
+        step++;
+    }
+
+    return result;
+}
+
 function pointerDown(e: PointerEvent) {
     isPointerDown = true;
+    if (zoom < EDIT_ZOOM) return;
 
     mapClickStartTime = performance.now();
-    const pos = manager.getCanvasRP(e);
-    mapClickStartPos.x = pos.x;
-    mapClickStartPos.y = pos.y;
+    const ss = manager.getCanvasScreenSpace(e);
+    mapClickStartPos.x = ss.x;
+    mapClickStartPos.y = ss.y;
+
+    elevationPointerDown(e);
 }
 
 function pointerMove(e: PointerEvent) {
     getLatlng(e);
+    if (zoom < EDIT_ZOOM) return;
+
+    elevationPointerMove(e);
 }
 
 function pointerUp(e: PointerEvent) {
@@ -479,16 +573,39 @@ function pointerUp(e: PointerEvent) {
 }
 
 function getLatlng(e: PointerEvent) {
-    return
-    const ndc = manager.getCanvasNP(e);
-    const intersect = manager.picker([zoneMeshGroup], ndc, true);
-    if (intersect == null) return;
-    const point = intersect.point;
+    return;
+    const ndc = manager.getCanvasNDC(e);
+    let point: Vector3 = null;
+
+    if (zoom < EDIT_ZOOM) {
+        // 使用性能更高的拾取
+        point = manager.getIntersectOfRay(earthRadius, ndc);
+    } else {
+        const intersect = manager.rayPicker([zoneMeshGroup], ndc, true);
+        if (intersect == null) return;
+        point = intersect.point;
+    }
     // const point = manager.getIntersectOfRay(earthRadius, ndc);
     if (!point) return;
 
     const latlng = manager.vector3ToLatLng(point);
     const tileIndex = getLL2TID().LLConvertPos(-latlng.lng, latlng.lat);
+}
+
+export function getIntersectOfMesh(ndc: Coordinate2D) {
+    const intersect = manager.rayPicker([zoneMeshGroup], ndc, true);
+    if (intersect == null) return;
+    const { point, uv } = intersect;
+    if (!point) return;
+
+    const latlng = manager.vector3ToLatLng(point);
+    const tileIndex = getLL2TID().LLConvertPos(-latlng.lng, latlng.lat);
+    return {
+        point,
+        tileIndex,
+        latlng,
+        uv,
+    };
 }
 
 /** 预处理地块 */
@@ -599,6 +716,49 @@ async function loadGlobalTexture() {
     uniforms.uTexture.value = globalTexture;
 }
 
+export function getGlobalMap() {
+    return {
+        zoneMeshMap,
+        zoneMeshTileVertexMap,
+        tileZoneMap,
+    };
+}
+
+/**
+ * 创建用于临时的tile datatexture
+ * 
+ * 使用float type
+ * 
+ * 行数代表tile数量
+ * 
+ * 每一行存：
+ * 第一个值存 tileId
+ * 第二个值存 边数，六边形 = 6，五边形 = 5
+ * 
+ * 之后依次存13个顶点的索引
+ * 五边形是11个，预留13个
+ * 
+ * 总共每个tile需要15个float存储
+ * 至少需要 4个rgba像素也就是16个float
+
+ * 每行 16个float
+ * 每次更新直接整个替换data，不打算局部更新某个值
+
+ * 4个 rgba = 16
+ */
+function createTileVertexTexture() {
+    const width = DataTextureConfig.width;
+    const height = 1;
+
+    const size = width * height * 4;
+
+    const data = new Float32Array(size);
+
+    const texture = new DataTexture(data, width, height, RGBAFormat, FloatType);
+
+    uniforms.uDataTexture.value = texture;
+}
+
 /**
  * 渲染所有分区对应的网格，这种比merge geometry 更实惠
  *
@@ -606,6 +766,7 @@ async function loadGlobalTexture() {
  */
 async function drawAllZoneMesh() {
     await loadGlobalTexture();
+    createTileVertexTexture();
 
     manager.scene.add(zoneMeshGroup);
 
@@ -613,12 +774,27 @@ async function drawAllZoneMesh() {
     const size = zoneTileIndicesMap.size;
 
     for (const [zone, tiles] of zoneTileIndicesMap) {
+        let accumVertexIndex = -1;
         const geoArr: BufferGeometry[] = [];
+
         for (let i = 0, len = tiles.length; i < len; i++) {
             const index = tiles[i];
 
             const { corners, x, y, z } = meshBytesUtils.getTileByIndex(index);
             const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(index);
+
+            const corLen = corners.length === 6 ? 13 : 11;
+            let _corLen = corLen;
+
+            const tileVertexIndices: number[] = [];
+            while (_corLen > 0) {
+                tileVertexIndices.push(accumVertexIndex + _corLen);
+                _corLen--;
+            }
+            zoneMeshTileVertexMap.set(index, tileVertexIndices);
+            accumVertexIndex += corLen;
+
+            tileZoneMap.set(index, zone);
 
             const vertices = corners.map<Coordinate>((v) => {
                 const corner = meshBytesUtils.getCornerByIndex(v);
@@ -662,7 +838,10 @@ async function drawAllZoneMesh() {
         });
 
         const mesh = new Mesh(geo, mat);
+        // 加一个标记方便知道是那个zone
+        mesh.userData.zone = zone;
         zoneMeshGroup.add(mesh);
+
         zoneMeshMap.set(zone, mesh);
 
         {
@@ -1081,7 +1260,7 @@ export function createTileGeometry(op: {
 export function createComplexTileGeometry(op: {
     vertices: Coordinate[];
     center: Coordinate;
-    tileIndex?: number;
+    tileIndex: number;
     color?: XColor;
     elevation?: number;
     waterElevation?: number;
@@ -1094,7 +1273,9 @@ export function createComplexTileGeometry(op: {
     const elevations: number[] = [];
     const colorMix: number[] = [];
 
-    const { vertices, center, elevation, waterElevation, uvs } = op;
+    const aTileId: number[] = [];
+
+    const { vertices, center, elevation, waterElevation, uvs, tileIndex } = op;
 
     const count = vertices.length;
 
@@ -1122,6 +1303,7 @@ export function createComplexTileGeometry(op: {
         const { x, y, z } = v;
         points.push(x, y, z);
         colorMix.push(diff);
+        aTileId.push(tileIndex);
         // const noraml = new Vector3(x, y, z).normalize();
 
         if (i < count) {
@@ -1137,6 +1319,7 @@ export function createComplexTileGeometry(op: {
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
     // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
     geometry.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1));
+    geometry.setAttribute("aTileId", new Float32BufferAttribute(aTileId, 1));
     geometry.setAttribute("colorMix", new BufferAttribute(new Float32Array(colorMix), 1));
     geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
 
@@ -1350,7 +1533,7 @@ export function setZoom(_zoom: number) {
     const ts = dis + meshBytesUtils.getHeader().radius;
     const position = manager.camera.position;
 
-    const des = manager.calcCollinearVector(position, ts);
+    const des = manager.getCollinearVector(position, ts);
 
     // zoom 的改变会影响 control
     // zoom 不涉及球体旋转，不使用球面插值动画
@@ -1744,9 +1927,9 @@ export function isVisibleVector(v: Vector3) {
 
     const dir = v.clone().sub(pos);
 
-    const n = manager.wpToNP(v);
+    const ndc = manager.worldSpaceToNDC(v);
     // 点是否可见需要在屏幕内，在相机视锥体内，面对相机
-    return Math.abs(n.x) <= 1 && Math.abs(n.y) <= 1 && Math.abs(n.z) <= 1 && dir.dot(v) < -0.2;
+    return Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 && Math.abs(ndc.z) <= 1 && dir.dot(v) < -0.2;
 }
 
 /**
@@ -1810,7 +1993,7 @@ export async function panToPos(pos: Vector3) {
 
     return new Promise((resolve) => {
         const oldPos = manager.camera.position;
-        const des = manager.calcCollinearVector(pos, oldPos.length());
+        const des = manager.getCollinearVector(pos, oldPos.length());
         manager.createCameraSphereTween(oldPos, des).onComplete(() => resolve(true));
     });
 }
@@ -1902,4 +2085,79 @@ function calcVertexUV(
 
 export function mixValue(v0: number, v1: number, t: number) {
     return v0 + (v1 - v0) * t;
+}
+
+/**
+ * 创建遮罩，一般用于突出显示某些区域又不想更改原有图层时使用
+ * @param style 遮罩样式，如果给出了 lineWidth，则基于边界绘制线，可能有多个闭合边界
+ * @param detail 可细粒度控制遮罩的单个格子样式 tileindex -> style
+ */
+export function createMask(tileIndices: Set<number>, style?: LayerStyle, detail?: Record<number, LayerStyle>) {
+    if (tileIndices.size === 0) return {};
+    const { color = [1, 0, 0, 0.4] } = style || {};
+    const _detail = detail || {};
+
+    const maskArr: BufferGeometry[] = [];
+
+    for (const index of tileIndices) {
+        const { corners } = meshBytesUtils.getTileByIndex(index);
+
+        const vertices = corners.map<Coordinate>((v) => {
+            const corner = meshBytesUtils.getCornerByIndex(v);
+            return {
+                x: corner.x,
+                y: corner.y,
+                z: -corner.z,
+            };
+        });
+
+        // 细粒度控制
+        let _color = color;
+        const { color: _color_ } = _detail[index] || {};
+        if (_color_) {
+            _color = _color_;
+        }
+
+        maskArr.push(createMaskTileGeometry(vertices, _color));
+    }
+
+    const maskGeo = BufferGeometryUtils.mergeGeometries(maskArr, false);
+
+    const maskMat = new MeshBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        depthTest: false,
+    });
+
+    const mask = new Mesh(maskGeo, maskMat);
+
+    return { mask };
+}
+
+/** 创建网格遮罩几何体 */
+export function createMaskTileGeometry(vertices: Coordinate[], color: XColor) {
+    const geo = new BufferGeometry();
+    const points: number[] = [];
+    const colors: number[] = [];
+
+    vertices.forEach((v) => {
+        const { x, y, z } = v;
+        points.push(x, y, z);
+        colors.push(...color);
+    });
+
+    geo.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
+    geo.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
+
+    if (vertices.length === 6) {
+        geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]); // 左手
+    } else {
+        geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4]); // 左手
+    }
+
+    return geo;
+}
+
+export function getUniforms() {
+    return uniforms;
 }
