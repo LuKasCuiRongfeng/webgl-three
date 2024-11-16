@@ -1,7 +1,7 @@
-varying vec3 xNormal;
+varying vec3 vvNormal;
 varying vec3 vPosition;
 
 void main() {
-    xNormal = normal;
+    vvNormal = normal;
     vPosition = csm_Position.xyz;
 }

@@ -1,22 +1,19 @@
-attribute float elevation;
-attribute float colorMix;
+attribute float aDiff;
 attribute float aTileId;
 
-varying float vColorMix;
+varying float vDiff;
 varying vec2 vUV;
-varying vec3 xNormal;
-varying vec3 vPosition;
 varying vec3 vHoverTileColor;
 
-uniform sampler2D uDataTexture;
 uniform float uMouseMode;
 uniform int uTileCount;
 uniform bool uPureColor;
 uniform float uTile[500];
 
 void main() {
-    float diff = step(0.001, colorMix);
-    diff *= colorMix;
+    float diff = step(0.001, aDiff);
+    diff *= aDiff;
+
     // 在着色器里直接修改顶点并没有改变原始的geometry顶点数据
     // 导致在射线投射时依然使用原始的顶点数据得到错误的交点
     // 解决办法是
@@ -34,47 +31,7 @@ void main() {
             }
         }
 
-        // float t0 = uTile[0];
-        // float t1 = uTile[1];
-        // float t2 = uTile[2];
-        // float t3 = uTile[3];
-        // float t4 = uTile[4];
-        // float t5 = uTile[5];
-        // float t6 = uTile[6];
-        // float t7 = uTile[7];
-        // float t8 = uTile[8];
-        // float t9 = uTile[9];
-        // float t10 = uTile[10];
-        // float t11 = uTile[11];
-        // float t12 = uTile[12];
-        // float t13 = uTile[13];
-        // float t14 = uTile[14];
-        // float t15 = uTile[15];
-        // float t16 = uTile[16];
-        // float t17 = uTile[17];
-        // float t18 = uTile[18];
-
-        // float fuck = abs(aTileId - t0) *
-        //     abs(aTileId - t1) *
-        //     abs(aTileId - t2) *
-        //     abs(aTileId - t3) *
-        //     abs(aTileId - t4) *
-        //     abs(aTileId - t5) *
-        //     abs(aTileId - t6) *
-        //     abs(aTileId - t7) *
-        //     abs(aTileId - t8) *
-        //     abs(aTileId - t9) *
-        //     abs(aTileId - t10) *
-        //     abs(aTileId - t11) *
-        //     abs(aTileId - t12) *
-        //     abs(aTileId - t13) *
-        //     abs(aTileId - t14) *
-        //     abs(aTileId - t15) *
-        //     abs(aTileId - t16) *
-        //     abs(aTileId - t17) *
-        //     abs(aTileId - t18);
-
-        // 击中 = 1, 没击中 = 0
+        // 如果当前地块在这个数组中，则 fuck = 1.0，否则fuck = 0.0
         fuck = 1. - step(0.001, fuck);
 
         csm_Position.xyz += (5.0 - diff) * fuck * normal;
@@ -156,11 +113,6 @@ void main() {
     //     }
     // }
 
-    vColorMix = colorMix;
-
+    vDiff = diff;
     vUV = uv;
-
-    // 这个normal在顶点变换后其实不准确
-    xNormal = normal;
-    vPosition = csm_Position.xyz;
 }

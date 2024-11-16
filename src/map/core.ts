@@ -57,6 +57,7 @@ import {
     MAX_MOVE_DELTA_SQA,
     MAX_ZOOM,
     MIN_ZOOM,
+    MOUSE_MODE,
     TILE_TEXTURE_ATLAS,
     TILE_TEXTURE_MAP,
     WIDTH_SEGMENTS,
@@ -203,26 +204,30 @@ let isPointerDown = false;
 /** 是否需要恢复 control */
 let needsResetControl = false;
 
-/** uniform 变量，将传入到shader里 */
+/** 网格 uniform 变量，将传入到shader里 */
 const uniforms = {
-    /** 光源方向 */
-    uSunDir: new Uniform(new Vector3(0, 0, 1)),
-    /** 大气层白天颜色 */
-    uAtmDay: new Uniform(new Color("#00aaff")),
-    /** 大气层晨昏颜色 */
-    uAtmTwilight: new Uniform(new Color("#ff6600")),
     /** 输入纹理 */
     uTexture: new Uniform<Texture>(null),
     /** 是否使用纯色着色，忽略纹理 */
     uPureColor: new Uniform(true),
-    /** 鼠标模式，-1 无， 0 海拔 */
-    uMouseMode: new Uniform(-1),
+    /** 鼠标编辑模式 */
+    uMouseMode: new Uniform(MOUSE_MODE.None),
     /** tile count，shader里不支持动态循环变量，使用uniform传入 */
     uTileCount: new Uniform(0),
     /** 存放 hover tile 数据 */
     uDataTexture: new Uniform<DataTexture>(null),
     /** 三层 */
     uTile: new Uniform(new Float32Array(500))
+};
+
+/** 大气层 uniform 变量，将传入到shader里 */
+const atmUniforms = {
+    /** 光源方向 */
+    uSunDir: new Uniform(new Vector3(0, 0, 1)),
+    /** 大气层白天颜色 */
+    uAtmDay: new Uniform(new Color("#00aaff")),
+    /** 大气层晨昏颜色 */
+    uAtmTwilight: new Uniform(new Color("#ff6600")),
 };
 
 export const DataTextureConfig = {
@@ -492,7 +497,7 @@ function udpateLight(elapsed: number) {
     pointLight.position.copy(v);
     dirLight.position.copy(v);
 
-    uniforms.uSunDir.value.copy(v.normalize());
+    atmUniforms.uSunDir.value.copy(v.normalize());
 }
 
 function createAtmosphere() {
@@ -503,7 +508,7 @@ function createAtmosphere() {
             // 技巧，显示背面，剔除正面
             side: BackSide,
             transparent: true,
-            uniforms: uniforms,
+            uniforms: atmUniforms,
             vertexShader: atmoVert,
             fragmentShader: atmoFrag,
         })
@@ -856,15 +861,16 @@ async function drawAllZoneMesh() {
             // raycast只认geometry的顶点，我操
             const posAttr = geo.getAttribute("position");
             const noramlAttr = geo.getAttribute("normal");
-            const colorMixAttr = geo.getAttribute("colorMix");
+            const aDiffAttr = geo.getAttribute("aDiff");
             const vertCount = posAttr.count;
-            for (let i = 0; i < vertCount; i++) {
-                let colorMix = colorMixAttr.getX(i);
-                if (colorMix < 0.001) colorMix = 0;
 
-                const x = posAttr.getX(i) + colorMix * noramlAttr.getX(i);
-                const y = posAttr.getY(i) + colorMix * noramlAttr.getY(i);
-                const z = posAttr.getZ(i) + colorMix * noramlAttr.getZ(i);
+            for (let i = 0; i < vertCount; i++) {
+                let diff = aDiffAttr.getX(i);
+                if (diff < 0.001) diff = 0;
+
+                const x = posAttr.getX(i) + diff * noramlAttr.getX(i);
+                const y = posAttr.getY(i) + diff * noramlAttr.getY(i);
+                const z = posAttr.getZ(i) + diff * noramlAttr.getZ(i);
 
                 posAttr.setX(i, x);
                 posAttr.setY(i, y);
@@ -1194,7 +1200,7 @@ async function drawLayer() {
         transparent: true,
         // color: 0xff0000,
         // wireframe: true,
-        uniforms: uniforms,
+        uniforms,
         vertexShader: tileVert,
         fragmentShader: tileFrag,
     });
@@ -1228,22 +1234,23 @@ export function createTileGeometry(op: {
     const geometry = new BufferGeometry();
     const points: number[] = [];
     // const colors: number[] = [];
-    const colorMix: number[] = [];
+    // 海拔和水体高度之差
+    const aDiff: number[] = [];
 
     const { vertices, elevation, waterElevation } = op;
 
     const count = vertices.length;
 
+    const diff = elevation - waterElevation;
+
     vertices.forEach((v) => {
         const { x, y, z } = v;
         points.push(x, y, z);
-        // colors.push(...color);
-        colorMix.push(elevation - waterElevation);
+        aDiff.push(diff);
     });
 
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-    // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
-    geometry.setAttribute("colorMix", new BufferAttribute(new Float32Array(colorMix), 1));
+    geometry.setAttribute("aDiff", new BufferAttribute(new Float32Array(aDiff), 1));
 
     if (count === 6) {
         // 六边形顶点索引，注意在自动计算法向量时，采用的右手定则
@@ -1274,10 +1281,10 @@ export function createComplexTileGeometry(op: {
     uvs?: number[];
 }) {
     const geometry = new BufferGeometry();
+
     const points: number[] = [];
-    // const colors: number[] = [];
-    const elevations: number[] = [];
-    const colorMix: number[] = [];
+    const aElevation: number[] = [];
+    const aDiff: number[] = [];
 
     const aTileId: number[] = [];
 
@@ -1308,25 +1315,20 @@ export function createComplexTileGeometry(op: {
     vertices.forEach((v, i) => {
         const { x, y, z } = v;
         points.push(x, y, z);
-        colorMix.push(diff);
+        aDiff.push(diff);
         aTileId.push(tileIndex);
-        // const noraml = new Vector3(x, y, z).normalize();
 
         if (i < count) {
-            // points.push(x, y, z);
-            elevations.push(0);
+            aElevation.push(0);
         } else {
-            // 修改顶点
-            // points.push(x + diff * noraml.x, y + diff * noraml.y, z + noraml.z);
-            elevations.push(elevation);
+            aElevation.push(elevation);
         }
     });
 
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-    // geometry.setAttribute("color", new BufferAttribute(new Float32Array(colors), 4));
-    geometry.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1));
+    // geometry.setAttribute("aElevation", new BufferAttribute(new Float32Array(aElevation), 1));
     geometry.setAttribute("aTileId", new Float32BufferAttribute(aTileId, 1));
-    geometry.setAttribute("colorMix", new BufferAttribute(new Float32Array(colorMix), 1));
+    geometry.setAttribute("aDiff", new BufferAttribute(new Float32Array(aDiff), 1));
     geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
 
     if (count === 6) {

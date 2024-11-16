@@ -626,3 +626,9 @@ export const TOLERANCE_DIS_ERROR = 200;
 
 export const ELEVATION_MAX = 20;
 export const ELEVATION_MIN = -9;
+
+export enum MOUSE_MODE {
+    None = -1,
+    Elevation = 0,
+    WaterElevation = 1,
+}

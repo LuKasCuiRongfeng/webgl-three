@@ -1,28 +1,40 @@
-varying vec3 xNormal;
+varying vec3 vvNormal;
 varying vec3 vPosition;
+
 uniform vec3 uSunDir;
 uniform vec3 uAtmDay;
 uniform vec3 uAtmTwilight;
 
 void main() {
-    vec3 fnormal = normalize(xNormal);
+    // 注意单位化
+    vec3 nNormal = normalize(vvNormal);
     vec3 color = vec3(0.);
-    // -1 ~1 方向反了
-    float sunOrientation = dot(uSunDir, fnormal);
 
-    // fresnel 菲涅尔
+    // -1 ~ 1
+    float sunOrientation = dot(uSunDir, nNormal);
+
     vec3 viewDirection = normalize(vPosition - cameraPosition);
-    // float fresnel = dot(viewDirection, fnormal) + 1.0;
+
+    // fresnel 菲涅尔，贴近地面时具有更好的发光效果
+    // float fresnel = dot(viewDirection, nNormal) + 1.0;
     // fresnel = pow(fresnel, 2.0);
 
-    // atomoshpere
-    float atMix = smoothstep(-0.5, 1.0, sunOrientation);
-    vec3 aColor = mix(uAtmTwilight, uAtmDay, atMix);
+    // atmosphere
+    float atmMix = smoothstep(-0.5, 1.0, sunOrientation);
+    vec3 aColor = mix(uAtmTwilight, uAtmDay, atmMix);
     // color = mix(color, aColor, fresnel * atMix);
     color += aColor;
 
-    // alpha
-    float alpha = dot(viewDirection, fnormal);
+    // specular
+    // vec3 reflection = reflect(-uSunDir, nNormal);
+    // float specular1 = -dot(reflection, viewDirection);
+    // specular1 = max(specular1, 0.);
+    // specular1 = pow(specular1, 32.);
+    // vec3 specularColor1 = mix(vec3(1.0), aColor, fresnel);
+    // color += specular * specularColor1;
+
+    // 增加大气层透明度alpha
+    float alpha = dot(viewDirection, nNormal);
     alpha = smoothstep(0.0, 0.5, alpha);
 
     float dayAlpha = smoothstep(-0.5, 0.0, sunOrientation);

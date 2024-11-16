@@ -33,10 +33,7 @@ export function elevationPointerMove(e: PointerEvent) {
     const { tileIndex } = getIntersectOfMesh(manager.getCanvasNDC(e)) || {}
     if (tileIndex == null) return
 
-    const { zoneMeshTileVertexMap } = getGlobalMap()
-    const { meshBytesUtils } = getGlobalBytesUtils()
     const { uDataTexture, uTileCount, uMouseMode, uTile } = getUniforms()
-
     const hoverIndexSet = new Set(traverseTileBFS(radius, tileIndex).flat());
 
     uTileCount.value = hoverIndexSet.size;
