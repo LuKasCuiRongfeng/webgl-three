@@ -5,8 +5,7 @@ import { Matrix4, Mesh } from "./three-manager"
 
 const status: CommonStatus = {
     isEdit: false,
-    radius: 10,
-    value: 3,
+    value: 1,
 };
 
 /** mask所在的中心格子，方便标记遮罩层，以及避免重复渲染 */
@@ -15,7 +14,7 @@ let tempMaskTile: number = undefined;
 /** 地块遮罩，关联 tempMaskTile */
 let tempMask: Mesh = null;
 
-export function elevationPointerDown(e: PointerEvent) {
+export function mountainPointerDown(e: PointerEvent) {
     // 只考虑左键触发
     if (e.button !== 0) return;
 
@@ -27,27 +26,24 @@ export function elevationPointerDown(e: PointerEvent) {
     banControl()
 }
 
-export function elevationPointerMove(e: PointerEvent) {
-    const { isEdit, radius, value } = status;
+export function mountainPointerMove(e: PointerEvent) {
+    const { isEdit } = status;
     const manager = getManager()
     const { tileIndex } = getIntersectOfMesh(manager.getCanvasNDC(e)) || {}
     if (tileIndex == null) return
 
     const { uDataTexture, uTileCount, uMouseMode, uTile } = getUniforms()
-    const hoverIndexSet = new Set(traverseTileBFS(radius, tileIndex).flat());
+    const { zoneMeshTileVertexMap } = getGlobalMap()
 
-    uTileCount.value = hoverIndexSet.size;
-    uMouseMode.value = MOUSE_MODE.Elevation
+    uMouseMode.value = MOUSE_MODE.Mountain
+    uTileCount.value = 1
+
+    const verts = zoneMeshTileVertexMap.get(tileIndex)
 
     const data = new Float32Array(500)
-
-    // 第一个存海拔
-    data[0] = value;
-    let i = 1;
-    for (const tile of hoverIndexSet) {
-        data[i] = tile
-        i++
-    }
+    data[0] = tileIndex
+    // 最后一个顶点索引
+    data[1] = verts[verts.length - 1]
     uTile.value = data
 
     // const dataTexture = uDataTexture.value
@@ -81,7 +77,7 @@ export function elevationPointerMove(e: PointerEvent) {
     // createTileMask(hoverIndexSet, tileIndex, { color: BRUSH_HOVER_COLOR });
 }
 
-export function elevationPointerUp(e: PointerEvent) {
+export function mountainPointerUp(e: PointerEvent) {
     resetControl()
 }
 

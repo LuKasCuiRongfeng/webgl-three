@@ -22,11 +22,14 @@ void main() {
     // csm_Position += diff * normal;
     vHoverTileColor = vec3(1.);
 
+    // 处理海拔
     if(uPureColor == false && uMouseMode == 0.) {
         float fuck = 1.;
-        for (int i = 0; i < uTileCount; i++) {
+        // 第一个值是海拔
+        float elevation = uTile[0];
+        for(int i = 1; i <= uTileCount; i++) {
             fuck *= abs(uTile[i] - aTileId);
-            if (fuck == 0.) {
+            if(fuck == 0.) {
                 break;
             }
         }
@@ -34,9 +37,20 @@ void main() {
         // 如果当前地块在这个数组中，则 fuck = 1.0，否则fuck = 0.0
         fuck = 1. - step(0.001, fuck);
 
-        csm_Position.xyz += (5.0 - diff) * fuck * normal;
+        csm_Position.xyz += (elevation - diff) * fuck * normal;
 
         vHoverTileColor = mix(vec3(1.0), vec3(0., 1.0, 0.), fuck);
+    }
+
+    // 处理山脉
+    if(uPureColor == false && uMouseMode == 2.) {
+        float tile = uTile[0];
+        float vert = uTile[1];
+        if(tile == aTileId && int(vert) == gl_VertexID) {
+            // 直接拔高三个单位
+            csm_Position.xyz += 3. * normal;
+            vHoverTileColor = vec3(0., 1.0, 0.);
+        }
     }
 
     // if(uPureColor == false && uMouseMode == 0.) {

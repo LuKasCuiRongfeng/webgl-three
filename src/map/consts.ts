@@ -215,7 +215,7 @@ export const ZOOM_SPEED = new Map([
 
 /** 层级-距离映射 */
 export const ZOOM_DIS = new Map([
-    [1, 1000],
+    [1, 2000],
     [2, 500],
     [3, 200],
     [4, 100],
@@ -631,4 +631,5 @@ export enum MOUSE_MODE {
     None = -1,
     Elevation = 0,
     WaterElevation = 1,
+    Mountain = 2
 }

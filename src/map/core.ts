@@ -88,6 +88,7 @@ import { isEqual, throttle } from "lodash-es";
 import lensflare0 from "../assets/lensflare0.png";
 import lensflare3 from "../assets/lensflare3.png";
 import { elevationPointerDown, elevationPointerMove, elevationPointerUp } from "./elevation";
+import { mountainPointerDown, mountainPointerMove, mountainPointerUp } from "./mountain";
 
 /** 操作地图数据的对象 */
 let mapBytesUtils: MapBytesUtils = null;
@@ -307,7 +308,7 @@ function createCamerea() {
     earthRadius = radius;
 
     // 相机
-    manager.camera = new PerspectiveCamera(50, 1, 0.1, radius * 2);
+    manager.camera = new PerspectiveCamera(50, 1, 0.1, radius * 3);
 
     manager.camera.position.set(0, 0, radius + CAMEARA_TO_EARTH_INIT_DIS);
 
@@ -406,6 +407,14 @@ function registerControlEvent() {
     control.addEventListener("change", cameraControlChanging);
 
     control.addEventListener("end", throttle(cameraControlChanged, 100, { trailing: true }));
+
+    control.addEventListener("wheel", throttle(() => {
+        // 根据距离调整投影矩阵，可以利用视锥剔除有效减少需要渲染的面，提升性能
+        const camera = manager.camera as PerspectiveCamera
+        const dis = camera.position.length()
+        camera.far = dis
+        camera.updateProjectionMatrix()
+    }, 100))
 }
 
 /** 获取经纬度转 tileindex 工具 */
@@ -566,6 +575,7 @@ function pointerDown(e: PointerEvent) {
     mapClickStartPos.y = ss.y;
 
     elevationPointerDown(e);
+    // mountainPointerDown(e)
 }
 
 function pointerMove(e: PointerEvent) {
@@ -573,12 +583,14 @@ function pointerMove(e: PointerEvent) {
     if (zoom < EDIT_ZOOM) return;
 
     elevationPointerMove(e);
+    // mountainPointerMove(e)
 }
 
 function pointerUp(e: PointerEvent) {
     isPointerDown = false;
 
     elevationPointerUp(e)
+    // mountainPointerUp(e)
 }
 
 function getLatlng(e: PointerEvent) {

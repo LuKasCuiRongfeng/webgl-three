@@ -33,6 +33,7 @@ type EventMap = {
     start: {};
     change: {};
     end: {};
+    wheel: {}
 };
 
 type ControlEventType = { type: keyof EventMap };
@@ -40,6 +41,7 @@ type ControlEventType = { type: keyof EventMap };
 const _changeEvent: ControlEventType = { type: "change" };
 const _startEvent: ControlEventType = { type: "start" };
 const _endEvent: ControlEventType = { type: "end" };
+const _wheelEvent: ControlEventType = { type: "wheel" };
 
 export class SphereOrbitControls extends Controls<EventMap> {
     /** 控件状态 */
@@ -132,7 +134,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
     /** 相机垂直地面的倾角*/
     _tiltOrthAngle = 0;
     /** 相机垂直地面的最大倾角*/
-    _tiltMaxAngle = Math.PI / 3.6;
+    _tiltMaxAngle = Math.PI / 3.2;
 
     _scale = 1;
 
@@ -346,6 +348,8 @@ export class SphereOrbitControls extends Controls<EventMap> {
         event.preventDefault();
 
         this.dispatchEvent(_startEvent);
+
+        this.dispatchEvent(_wheelEvent)
 
         // @ts-ignore
         this._handleMouseWheel(this._customWheelEvent(event));
