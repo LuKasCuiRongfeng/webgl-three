@@ -1,11 +1,11 @@
 import { BRUSH_HOVER_COLOR, BRUSH_MAX_RADIUS, BRUSH_MIN_RADIUS } from "./consts";
-import { banControl, createMask, DataTextureConfig, getGlobalBytesUtils, getGlobalMap, getIntersectOfMesh, getManager, getUniforms, traverseTileBFS } from "./core";
+import { banControl, createMask, DataTextureConfig, getGlobalBytesUtils, getGlobalMap, getIntersectOfMesh, getManager, getUniforms, resetControl, traverseTileBFS } from "./core";
 import { CommonStatus, LayerStyle } from "./types";
 import { Matrix4, Mesh } from "./three-manager"
 
 const status: CommonStatus = {
     isEdit: false,
-    radius: 1,
+    radius: 10,
     value: 1,
 };
 
@@ -35,40 +35,55 @@ export function elevationPointerMove(e: PointerEvent) {
 
     const { zoneMeshTileVertexMap } = getGlobalMap()
     const { meshBytesUtils } = getGlobalBytesUtils()
-    const { uDataTexture, uTileCount, uMouseMode } = getUniforms()
+    const { uDataTexture, uTileCount, uMouseMode, uTile } = getUniforms()
 
     const hoverIndexSet = new Set(traverseTileBFS(radius, tileIndex).flat());
 
     uTileCount.value = hoverIndexSet.size;
     uMouseMode.value = 0
 
-    const dataTexture = uDataTexture.value
-    const width = DataTextureConfig.width
+    const data = new Float32Array(500)
 
-    const size = width * hoverIndexSet.size * 4
-    const data = new Float32Array(size);
-
-    let offset = 0
-
+    let i = 0;
     for (const tile of hoverIndexSet) {
-        const { corners } = meshBytesUtils.getTileByIndex(tile)
-        const verts = zoneMeshTileVertexMap.get(tile)
-
-        // 第一个存 tileid
-        data[offset] = tile
-        // 第二个存 edge count
-        data[offset + 1] = corners.length
-        // 之后依次存顶点 索引
-        verts.forEach((v, i) => {
-            data[offset + 1 + i + 1] = v
-        })
-
-        offset += width * 4
+        data[i] = tile
+        i++
     }
-    // @ts-ignore
-    dataTexture.image.data = data
-    dataTexture.needsUpdate = true
+    uTile.value = data
+
+    // const dataTexture = uDataTexture.value
+    // const width = DataTextureConfig.width
+
+    // const size = width * hoverIndexSet.size * 4
+    // const data = new Float32Array(size);
+
+    // let offset = 0
+
+    // for (const tile of hoverIndexSet) {
+    //     const { corners } = meshBytesUtils.getTileByIndex(tile)
+    //     const verts = zoneMeshTileVertexMap.get(tile)
+
+    //     // 第一个存 tileid
+    //     data[offset] = tile
+    //     // 第二个存 edge count
+    //     data[offset + 1] = corners.length
+    //     // 之后依次存顶点 索引
+    //     verts.forEach((v, i) => {
+    //         data[offset + 1 + i + 1] = v
+    //     })
+
+    //     offset += width * 4
+    // }
+    // // @ts-ignore
+    // dataTexture.image.data = data
+    // dataTexture.needsUpdate = true
+
+    // console.log(dataTexture.image.data)
     // createTileMask(hoverIndexSet, tileIndex, { color: BRUSH_HOVER_COLOR });
+}
+
+export function elevationPointerUp(e: PointerEvent) {
+    resetControl()
 }
 
 export function getStatus() {

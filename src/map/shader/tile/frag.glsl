@@ -1,13 +1,13 @@
 varying float vColorMix;
 varying vec2 vUV;
-uniform sampler2D uTexture;
-
+varying vec3 vHoverTileColor;
 varying vec3 xNormal;
 varying vec3 vPosition;
+
 uniform vec3 uSunDir;
 uniform vec3 uAtmDay;
 uniform vec3 uAtmTwilight;
-
+uniform sampler2D uTexture;
 uniform bool uPureColor;
 
 void main() {
@@ -39,13 +39,16 @@ void main() {
         color = tColor.rgb;
     }
 
+    // 悬浮色
+    color = color * vHoverTileColor;
+
     // vec3 night = color * 0.002;
-    vec3 night = color * 0.2;
+    // vec3 night = color * 0.2;
 
-    float sunOrientation = dot(uSunDir, fnormal);
-    float dayMix = smoothstep(-0.25, 0.5, sunOrientation);
+    // float sunOrientation = dot(uSunDir, fnormal);
+    // float dayMix = smoothstep(-0.25, 0.5, sunOrientation);
 
-    // 昼夜更替效果
+    // // 昼夜更替效果
     // color = mix(night, color, dayMix);
 
     // fresnel 菲涅尔，贴近地面时具有更好的发光效果

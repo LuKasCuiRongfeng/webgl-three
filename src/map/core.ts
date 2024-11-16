@@ -86,7 +86,7 @@ import { isEqual, throttle } from "lodash-es";
 // import { CONTROL_STATE } from "./sphereOrbit";
 import lensflare0 from "../assets/lensflare0.png";
 import lensflare3 from "../assets/lensflare3.png";
-import { elevationPointerDown, elevationPointerMove } from "./elevation";
+import { elevationPointerDown, elevationPointerMove, elevationPointerUp } from "./elevation";
 
 /** 操作地图数据的对象 */
 let mapBytesUtils: MapBytesUtils = null;
@@ -221,6 +221,8 @@ const uniforms = {
     uTileCount: new Uniform(0),
     /** 存放 hover tile 数据 */
     uDataTexture: new Uniform<DataTexture>(null),
+    /** 三层 */
+    uTile: new Uniform(new Float32Array(500))
 };
 
 export const DataTextureConfig = {
@@ -300,7 +302,7 @@ function createCamerea() {
     earthRadius = radius;
 
     // 相机
-    manager.camera = new PerspectiveCamera(50, 1, 0.1, radius * 5);
+    manager.camera = new PerspectiveCamera(50, 1, 0.1, radius * 2);
 
     manager.camera.position.set(0, 0, radius + CAMEARA_TO_EARTH_INIT_DIS);
 
@@ -570,6 +572,8 @@ function pointerMove(e: PointerEvent) {
 
 function pointerUp(e: PointerEvent) {
     isPointerDown = false;
+
+    elevationPointerUp(e)
 }
 
 function getLatlng(e: PointerEvent) {
@@ -774,7 +778,7 @@ async function drawAllZoneMesh() {
     const size = zoneTileIndicesMap.size;
 
     for (const [zone, tiles] of zoneTileIndicesMap) {
-        let accumVertexIndex = -1;
+        let accumVertexIndex = 0;
         const geoArr: BufferGeometry[] = [];
 
         for (let i = 0, len = tiles.length; i < len; i++) {
@@ -783,13 +787,15 @@ async function drawAllZoneMesh() {
             const { corners, x, y, z } = meshBytesUtils.getTileByIndex(index);
             const { type, elevation, waterElevation } = mapBytesUtils.getTileByIndex(index);
 
+            // 六边形 13个顶点，五边形11个顶点
             const corLen = corners.length === 6 ? 13 : 11;
-            let _corLen = corLen;
+            let _corLen = 0;
 
             const tileVertexIndices: number[] = [];
-            while (_corLen > 0) {
+            while (_corLen < corLen) {
+                // 按照顺序记录顶点索引
                 tileVertexIndices.push(accumVertexIndex + _corLen);
-                _corLen--;
+                _corLen++;
             }
             zoneMeshTileVertexMap.set(index, tileVertexIndices);
             accumVertexIndex += corLen;
