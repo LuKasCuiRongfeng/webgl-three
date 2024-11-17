@@ -218,7 +218,7 @@ const uniforms = {
     /** 存放 hover tile 数据 */
     uDataTexture: new Uniform<DataTexture>(null),
     /** 三层 */
-    uTile: new Uniform(new Float32Array(500))
+    uTile: new Uniform(new Float32Array(500)),
 };
 
 /** 大气层 uniform 变量，将传入到shader里 */
@@ -235,9 +235,9 @@ export const DataTextureConfig = {
     /** 每行4个 rgba， 第一个值存tileid，
      * 第二个值存edge数量，之后存13个(五边形是11个)顶点
      * 总共需要15个float，所以需要4个 rgba共16个
-    */
-    width: 4
-}
+     */
+    width: 4,
+};
 
 export async function initMap() {
     if (haveInitialed) {
@@ -331,17 +331,18 @@ function createCamerea() {
 function cameraControlChanging() {
     controlChanging = true;
     needsUpdateWhenControlChanging();
-
-    setTiltCamera();
 }
 
 function setTiltCamera() {
     const controls = getOrbitControls();
     const minDis = ZOOM_DIS.get(EDIT_ZOOM);
     const pos = manager.camera.position;
-    const dis = pos.length() - earthRadius;
+    let dis = pos.length() - earthRadius;
 
     if (dis < minDis) {
+        if (isLowHeight) {
+            dis = pos.clone().sub(controls.target).length()
+        }
         const angle =
             controls._tiltMaxAngle * (1 - (dis - CAMEARA_TO_EARTH_MIN_DIS) / (minDis - CAMEARA_TO_EARTH_MIN_DIS));
 
@@ -408,13 +409,21 @@ function registerControlEvent() {
 
     control.addEventListener("end", throttle(cameraControlChanged, 100, { trailing: true }));
 
-    control.addEventListener("wheel", throttle(() => {
-        // 根据距离调整投影矩阵，可以利用视锥剔除有效减少需要渲染的面，提升性能
-        const camera = manager.camera as PerspectiveCamera
-        const dis = camera.position.length()
-        camera.far = dis
-        camera.updateProjectionMatrix()
-    }, 100))
+    control.addEventListener(
+        "wheel",
+        throttle(() => {
+            // 根据距离调整投影矩阵，可以利用视锥剔除有效减少需要渲染的面，提升性能
+            const camera = manager.camera as PerspectiveCamera;
+            const dis = camera.position.length();
+            camera.far = dis;
+            if (zoom >= EDIT_ZOOM) {
+                camera.far = dis / 2;
+            }
+            camera.updateProjectionMatrix();
+
+            setTiltCamera();
+        }, 100)
+    );
 }
 
 /** 获取经纬度转 tileindex 工具 */
@@ -589,7 +598,7 @@ function pointerMove(e: PointerEvent) {
 function pointerUp(e: PointerEvent) {
     isPointerDown = false;
 
-    elevationPointerUp(e)
+    elevationPointerUp(e);
     // mountainPointerUp(e)
 }
 
