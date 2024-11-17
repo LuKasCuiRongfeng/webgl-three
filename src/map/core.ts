@@ -643,8 +643,8 @@ async function preprocessTiles() {
     const { tilesCount } = meshBytesUtils.getHeader();
 
     // 减少计算
-    let accumFaceIndex = -1;
-    let accumVertexIndex = -1;
+    // let accumFaceIndex = -1;
+    // let accumVertexIndex = -1;
 
     // 预分区，包括网格和地图数据
     for (let i = 0; i < tilesCount; i++) {
@@ -662,25 +662,25 @@ async function preprocessTiles() {
         }
 
         // 单个个多边形具有的三角面
-        const corLen = corners.length;
-        const faceCount = corLen === 6 ? 4 : 3;
+        // const corLen = corners.length;
+        // const faceCount = corLen === 6 ? 4 : 3;
 
-        let _corLen = corLen;
-        let _faceCount = faceCount;
+        // let _corLen = corLen;
+        // let _faceCount = faceCount;
 
-        const tileVertexIndices: number[] = [];
-        while (_corLen > 0) {
-            tileVertexIndices.push(accumVertexIndex + _corLen);
-            _corLen--;
-        }
-        TileVertexIndexMap.set(i, tileVertexIndices);
-        accumVertexIndex += corLen;
+        // const tileVertexIndices: number[] = [];
+        // while (_corLen > 0) {
+        //     tileVertexIndices.push(accumVertexIndex + _corLen);
+        //     _corLen--;
+        // }
+        // TileVertexIndexMap.set(i, tileVertexIndices);
+        // accumVertexIndex += corLen;
 
-        while (_faceCount > 0) {
-            faceTileIndexMap.set(accumFaceIndex + _faceCount, i);
-            _faceCount--;
-        }
-        accumFaceIndex += faceCount;
+        // while (_faceCount > 0) {
+        //     faceTileIndexMap.set(accumFaceIndex + _faceCount, i);
+        //     _faceCount--;
+        // }
+        // accumFaceIndex += faceCount;
 
         // 通过睡眠 ease cpu 的计算
         if (i % 100000 === 0) {
@@ -840,13 +840,10 @@ async function drawAllZoneMesh() {
             const uvs = getTileUV(index);
             // tileIndexUVMap.set(index, uvs)
 
-            const color = randomColor();
-
             geoArr.push(
                 createComplexTileGeometry({
                     vertices,
                     center: { x, y, z: -z },
-                    color,
                     elevation,
                     waterElevation,
                     type,
@@ -1500,6 +1497,7 @@ async function drawVirtualZone() {
  * @param needsZonesUpdate zones 是否需要更新 default = true
  */
 async function setChangedControl(needsZonesUpdate = true) {
+    return
     if (!manager || !needsZonesUpdate) return;
     const pos = manager.camera.position;
     // 基于新位置需要更新分区
