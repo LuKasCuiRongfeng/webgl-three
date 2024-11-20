@@ -134,7 +134,7 @@ export class SphereOrbitControls extends Controls<EventMap> {
     /** 相机垂直地面的倾角*/
     _tiltOrthAngle = 0;
     /** 相机垂直地面的最大倾角*/
-    _tiltMaxAngle = Math.PI / 3;
+    _tiltMaxAngle = Math.PI / 2.8;
 
     _scale = 1;
 

@@ -221,8 +221,8 @@ export const ZOOM_DIS = new Map([
     [4, 100],
     [5, 70],
     [6, 50],
-    [7, 36],
-    [MAX_ZOOM, 30],
+    [7, 30],
+    [MAX_ZOOM, 20],
 ]);
 
 // --------------------------------------------------------
@@ -263,7 +263,6 @@ export const LNG_SLICES = 24;
 
 /** 纬度划区, 在视觉上把南北极 化为一个区*/
 export const LAT_DIVIDER = [0, 10, 30, 50, 70, 80, 90];
-// export const LAT_DIVIDER = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90];
 
 /** 注意这个值 和 LAT_DIVIDER 对应起来  */
 export const LAT_SLICES = 12;
@@ -631,5 +630,6 @@ export enum MOUSE_MODE {
     None = -1,
     Elevation = 0,
     WaterElevation = 1,
-    Mountain = 2
+    Mountain = 2,
+    Vegetation = 3
 }

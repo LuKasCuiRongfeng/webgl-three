@@ -36,6 +36,9 @@ import ThreeManager, {
     DataTexture,
     RGBAFormat,
     FloatType,
+    MeshLambertMaterial,
+    Frustum,
+    Box3,
 } from "./three-manager";
 import { getBytesUtils, readFileBase64, sleep } from "./utils";
 import { LL2TID } from "./LL2TID";
@@ -89,6 +92,7 @@ import lensflare0 from "../assets/lensflare0.png";
 import lensflare3 from "../assets/lensflare3.png";
 import { elevationPointerDown, elevationPointerMove, elevationPointerUp } from "./elevation";
 import { mountainPointerDown, mountainPointerMove, mountainPointerUp } from "./mountain";
+import { createVegetationInstance, vegetationPointerDown, vegetationPointerMove, vegetationPointerUp } from "./vegetation";
 
 /** 操作地图数据的对象 */
 let mapBytesUtils: MapBytesUtils = null;
@@ -205,6 +209,8 @@ let isPointerDown = false;
 /** 是否需要恢复 control */
 let needsResetControl = false;
 
+let testTree: Group = null;
+
 /** 网格 uniform 变量，将传入到shader里 */
 const uniforms = {
     /** 输入纹理 */
@@ -217,8 +223,8 @@ const uniforms = {
     uTileCount: new Uniform(0),
     /** 存放 hover tile 数据 */
     uDataTexture: new Uniform<DataTexture>(null),
-    /** 三层 */
-    uTile: new Uniform(new Float32Array(500)),
+    /** 通常用来暂存鼠标选中的地块 id 数组 */
+    uTileHoverArray: new Uniform(new Float32Array(500)),
 };
 
 /** 大气层 uniform 变量，将传入到shader里 */
@@ -284,6 +290,10 @@ export async function initMap() {
 
     createLight();
 
+    await loadTestTree();
+
+    createVegetationInstance()
+
     onCanvasEvent(manager.getRenderer().domElement);
 
     // await preprocessInstanceTiles();
@@ -341,7 +351,7 @@ function setTiltCamera() {
 
     if (dis < minDis) {
         if (isLowHeight) {
-            dis = pos.clone().sub(controls.target).length()
+            dis = pos.clone().sub(controls.target).length();
         }
         const angle =
             controls._tiltMaxAngle * (1 - (dis - CAMEARA_TO_EARTH_MIN_DIS) / (minDis - CAMEARA_TO_EARTH_MIN_DIS));
@@ -475,7 +485,7 @@ function createEarth() {
 }
 
 function createLight() {
-    dirLight = new DirectionalLight(0xffffff, 2);
+    dirLight = new DirectionalLight(0xffffff, 6);
     const ambiet = new AmbientLight(0xffffff, 2);
     dirLight.position.copy(manager.camera.position);
 
@@ -484,7 +494,7 @@ function createLight() {
     const lens0 = loader.load(lensflare0);
     const lens3 = loader.load(lensflare3);
 
-    pointLight = new PointLight(0xffffff, 2, 2000, 0);
+    pointLight = new PointLight(0xffffff, 0.5, 2000, 0);
     pointLight.color.setHSL(0.995, 0.5, 0.9);
     pointLight.position.copy(manager.camera.position);
 
@@ -506,15 +516,20 @@ function createLight() {
 function udpateLight(elapsed: number) {
     if (!sunOrbit || !pointLight || !dirLight) return;
 
-    sunOrbit.theta = elapsed * 0.5;
     const v = new Vector3();
-    // 使用轨道位置
-    // v.setFromSpherical(sunOrbit);
-    // 使用相机位置，保证始终朝向灯光
-    v.copy(manager.camera.position);
+
+    // 灯光位置使用动画旋转的轨道位置
+    // sunOrbit.theta = elapsed * 0.5;
+
+    // 灯光位置使用相机位置
+    sunOrbit.setFromVector3(manager.camera.position);
+    // 稍微往左偏离一个角度
+    sunOrbit.theta -= Math.PI / 20;
+
+    v.setFromSpherical(sunOrbit);
+
     pointLight.position.copy(v);
     dirLight.position.copy(v);
-
     atmUniforms.uSunDir.value.copy(v.normalize());
 }
 
@@ -522,7 +537,9 @@ function createAtmosphere() {
     const atm = new Mesh(
         new SphereGeometry(earthRadius, WIDTH_SEGMENTS, HEIGHT_SEGMENTS),
         new CustomShaderMaterial({
-            baseMaterial: MeshPhongMaterial,
+            // baseMaterial: MeshPhongMaterial,
+            // 不需要高光
+            baseMaterial: MeshLambertMaterial,
             // 技巧，显示背面，剔除正面
             side: BackSide,
             transparent: true,
@@ -584,7 +601,8 @@ function pointerDown(e: PointerEvent) {
     mapClickStartPos.y = ss.y;
 
     elevationPointerDown(e);
-    // mountainPointerDown(e)
+    mountainPointerDown(e);
+    vegetationPointerDown(e)
 }
 
 function pointerMove(e: PointerEvent) {
@@ -592,14 +610,16 @@ function pointerMove(e: PointerEvent) {
     if (zoom < EDIT_ZOOM) return;
 
     elevationPointerMove(e);
-    // mountainPointerMove(e)
+    mountainPointerMove(e);
+    vegetationPointerMove(e)
 }
 
 function pointerUp(e: PointerEvent) {
     isPointerDown = false;
 
     elevationPointerUp(e);
-    // mountainPointerUp(e)
+    mountainPointerUp(e);
+    vegetationPointerUp(e)
 }
 
 function getLatlng(e: PointerEvent) {
@@ -652,7 +672,7 @@ async function preprocessTiles() {
         const zone = getZoneByPoint(new Vector3(x, y, -z));
         if (!zone) continue;
 
-        const key = getZoneKey(zone, true);
+        const key = getZoneKey(zone);
         const tiles = zoneTileIndicesMap.get(key);
 
         if (!tiles) {
@@ -857,10 +877,8 @@ async function drawAllZoneMesh() {
         geo.boundsTree = new MeshBVH(geo);
 
         const mat = new CustomShaderMaterial({
-            baseMaterial: MeshPhongMaterial,
-            // vertexColors: true,
-            // transparent: true,
-            // wireframe: true,
+            // baseMaterial: MeshPhongMaterial,
+            baseMaterial: MeshLambertMaterial,
             uniforms,
             vertexShader: tileVert,
             fragmentShader: tileFrag,
@@ -879,16 +897,18 @@ async function drawAllZoneMesh() {
             // raycast只认geometry的顶点，我操
             const posAttr = geo.getAttribute("position");
             const noramlAttr = geo.getAttribute("normal");
-            const aDiffAttr = geo.getAttribute("aDiff");
+            const aEleAttr = geo.getAttribute("aEle");
+            const aWaterEleAttr = geo.getAttribute("aWaterEle");
             const vertCount = posAttr.count;
 
             for (let i = 0; i < vertCount; i++) {
-                let diff = aDiffAttr.getX(i);
-                if (diff < 0.001) diff = 0;
+                const ele = aEleAttr.getX(i);
+                const waterEle = aWaterEleAttr.getX(i);
+                const altitude = Math.max(ele, waterEle);
 
-                const x = posAttr.getX(i) + diff * noramlAttr.getX(i);
-                const y = posAttr.getY(i) + diff * noramlAttr.getY(i);
-                const z = posAttr.getZ(i) + diff * noramlAttr.getZ(i);
+                const x = posAttr.getX(i) + altitude * noramlAttr.getX(i);
+                const y = posAttr.getY(i) + altitude * noramlAttr.getY(i);
+                const z = posAttr.getZ(i) + altitude * noramlAttr.getZ(i);
 
                 posAttr.setX(i, x);
                 posAttr.setY(i, y);
@@ -997,7 +1017,8 @@ async function preprocessInstanceTiles() {
             first6Mesh = new InstancedMesh(
                 first6Geometry,
                 new CustomShaderMaterial({
-                    baseMaterial: MeshPhongMaterial,
+                    // baseMaterial: MeshPhongMaterial,
+                    baseMaterial: MeshLambertMaterial,
                     // vertexColors: true,
                     // transparent: true,
                     color: 0xff0000,
@@ -1212,7 +1233,8 @@ async function drawLayer() {
 
     // 普通材质
     const material = new CustomShaderMaterial({
-        baseMaterial: MeshPhongMaterial,
+        // baseMaterial: MeshPhongMaterial,
+        baseMaterial: MeshLambertMaterial,
         vertexColors: true,
         // 用于图层
         transparent: true,
@@ -1302,7 +1324,8 @@ export function createComplexTileGeometry(op: {
 
     const points: number[] = [];
     const aElevation: number[] = [];
-    const aDiff: number[] = [];
+    const aEle: number[] = [];
+    const aWaterEle: number[] = [];
 
     const aTileId: number[] = [];
 
@@ -1328,12 +1351,11 @@ export function createComplexTileGeometry(op: {
     // 加上中心
     vertices.push(center);
 
-    const diff = elevation - waterElevation;
-
     vertices.forEach((v, i) => {
         const { x, y, z } = v;
         points.push(x, y, z);
-        aDiff.push(diff);
+        aEle.push(elevation);
+        aWaterEle.push(waterElevation);
         aTileId.push(tileIndex);
 
         if (i < count) {
@@ -1344,9 +1366,9 @@ export function createComplexTileGeometry(op: {
     });
 
     geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-    // geometry.setAttribute("aElevation", new BufferAttribute(new Float32Array(aElevation), 1));
     geometry.setAttribute("aTileId", new Float32BufferAttribute(aTileId, 1));
-    geometry.setAttribute("aDiff", new BufferAttribute(new Float32Array(aDiff), 1));
+    geometry.setAttribute("aEle", new BufferAttribute(new Float32Array(aEle), 1));
+    geometry.setAttribute("aWaterEle", new BufferAttribute(new Float32Array(aWaterEle), 1));
     geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
 
     if (count === 6) {
@@ -1444,21 +1466,7 @@ export function getZoneByPoint(v: Vector3): GISZone {
     return [latZone, lngZone];
 }
 
-/**
- * 获取当前 分区key string，特殊处理极地区域的 zonekey 务必通过此方法获取 key
- * @param ignorePolar 如果为 true 将忽略掉合并分区，只考虑单个分区
- */
-export function getZoneKey(zone: GISZone, ignorePolar?: boolean) {
-    const [lat] = zone;
-
-    if (isPolarZone(zone) && !ignorePolar) {
-        if (lat > LAT_SLICES / 2) {
-            return ZONE_KEY_POLAR_N;
-        } else {
-            return ZONE_KEY_POLAR_S;
-        }
-    }
-
+export function getZoneKey(zone: GISZone) {
     return JSON.stringify(zone);
 }
 
@@ -1497,7 +1505,7 @@ async function drawVirtualZone() {
  * @param needsZonesUpdate zones 是否需要更新 default = true
  */
 async function setChangedControl(needsZonesUpdate = true) {
-    return
+    return;
     if (!manager || !needsZonesUpdate) return;
     const pos = manager.camera.position;
     // 基于新位置需要更新分区
@@ -1737,7 +1745,8 @@ async function drawZones(zones: GISZoneMap) {
 
     // 普通材质
     const tilesMat = new CustomShaderMaterial({
-        baseMaterial: MeshPhongMaterial,
+        // baseMaterial: MeshPhongMaterial,
+        baseMaterial: MeshLambertMaterial,
         // vertexColors: true,
         // transparent: true,
         // wireframe: true,
@@ -1885,6 +1894,52 @@ function getVisibleZones(zones: GISZoneMap) {
     return all;
 }
 
+// 用视锥剔除反而会包进去很多其他地块，我插，还不如之前检测可见性的方法
+/**
+ *         frustm.setFromProjectionMatrix(
+            new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+        );
+ */
+function getVisibleZonesFrustum(zones: GISZoneMap, frustm: Frustum) {
+    if (!zones) return;
+
+    const all: GISZoneMap = {};
+
+    for (const zone of Object.values(zones)) {
+        if (isVisibleZoneFrustum(zone, frustm)) {
+            all[getZoneKey(zone)] = zone;
+        }
+    }
+
+    let check: GISZoneMap = all;
+
+    while (Object.keys(check).length > 0) {
+        const add: GISZoneMap = {};
+
+        for (const zone of Object.values(check)) {
+            const adj = getAdjacentZones(zone);
+
+            for (const z of Object.values(adj)) {
+                const k = getZoneKey(z);
+                if (all[k]) continue;
+
+                // 多包括外面一层，避免pan时的断裂
+                if (!isVisibleZoneFrustum(z, frustm)) {
+                    all[k] = z;
+                    continue;
+                }
+
+                all[k] = z;
+                add[k] = z;
+            }
+        }
+
+        check = add;
+    }
+
+    return all;
+}
+
 /** 获取该分区的相邻分区， 不包括自己 */
 function getAdjacentZones(zone: GISZone) {
     const [lat] = zone;
@@ -1914,13 +1969,6 @@ function isAdjacentZones(zone1: GISZone, zone2: GISZone) {
 
     if (getZoneKey(zone1) === getZoneKey(zone2)) return false;
 
-    // 单独判断极区
-    if (isPolarZone(zone1) || isPolarZone(zone2)) {
-        //纬度分区差 为 1
-        if (Math.abs(zone2[0] - zone1[0]) === 1) return true;
-        return false;
-    }
-
     const [zLat1, zLng1] = zone1;
     const [zLat2, zLng2] = zone2;
 
@@ -1938,6 +1986,25 @@ function isVisibleZone(zone: GISZone) {
     return tileIndices.some((i) => isVisibleTile(i));
 }
 
+/** 检查是否是可见区域，视锥版本 */
+function isVisibleZoneFrustum(zone: GISZone, frustm: Frustum) {
+    const { left, right, top, bottom } = getZoneBox(zone);
+    // 左上
+    const lt = manager.latLngToVector3(top, left, earthRadius);
+    // 左下
+    const lb = manager.latLngToVector3(bottom, left, earthRadius);
+    // 右上
+    const rt = manager.latLngToVector3(top, right, earthRadius);
+    // 右下
+    const rb = manager.latLngToVector3(bottom, right, earthRadius);
+
+    const box = new Box3();
+    const corners = [lt, lb, rt, rb];
+    corners.forEach((v) => box.expandByPoint(v));
+
+    return frustm.intersectsBox(box);
+}
+
 /** 格子是否在可视区域内 */
 export function isVisibleTile(index: number) {
     if (index == undefined) return false;
@@ -1950,13 +2017,19 @@ export function isVisibleTile(index: number) {
 /** 坐标是否可见 */
 export function isVisibleVector(v: Vector3) {
     // 注意克隆一下，这个会改变原向量
-    const pos = manager.camera.position;
+    // const pos = manager.camera.position;
+    const pos = getOrbitControls().target;
 
-    const dir = v.clone().sub(pos);
+    // const dir = v.clone().sub(pos);
 
     const ndc = manager.worldSpaceToNDC(v);
     // 点是否可见需要在屏幕内，在相机视锥体内，面对相机
-    return Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 && Math.abs(ndc.z) <= 1 && dir.dot(v) < -0.2;
+    return (
+        Math.abs(ndc.x) <= 1 &&
+        Math.abs(ndc.y) <= 1 &&
+        Math.abs(ndc.z) <= 1 &&
+        pos.clone().normalize().dot(v.clone().normalize()) > 0.99
+    );
 }
 
 /**
@@ -1968,7 +2041,7 @@ function getZoneTileIndices(zone: GISZone) {
         const [lat] = zone;
         const indices: number[] = [];
         for (let i = 1; i <= LNG_SLICES; i++) {
-            const _indices = zoneTileIndicesMap.get(getZoneKey([lat, i], true));
+            const _indices = zoneTileIndicesMap.get(getZoneKey([lat, i]));
             indices.push(..._indices);
         }
 
@@ -2187,4 +2260,22 @@ export function createMaskTileGeometry(vertices: Coordinate[], color: XColor) {
 
 export function getUniforms() {
     return uniforms;
+}
+
+export function setEditType(type: MOUSE_MODE) {
+    uniforms.uMouseMode.value = type;
+}
+
+export function getEditType() {
+    return uniforms.uMouseMode.value;
+}
+
+export async function loadTestTree() {
+    const loader = manager.GetGLTFLoader();
+    const gltf = await loader.loadAsync("http://localhost:12345/fuck/quiver_tree_02_1k.gltf");
+    testTree = gltf.scene;
+}
+
+export function getTestTree() {
+    return testTree;
 }

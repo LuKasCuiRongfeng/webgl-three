@@ -88,7 +88,8 @@ import {
     PointLight,
     DataTexture,
     RGBAFormat,
-    FloatType
+    FloatType,
+    Frustum
 } from "three";
 
 // import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -96,12 +97,15 @@ import { DragControls } from "three/examples/jsm/controls/DragControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+
 import { OutlinePass } from "three/examples/jsm/postprocessing/OutlinePass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 // import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 // import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js"
+
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { MeshBVH, acceleratedRaycast } from "three-mesh-bvh";
 import { Coordinate, Coordinate2D, LatLng } from "./types";
@@ -141,6 +145,7 @@ class ThreeManager {
     private fbxLoader: FBXLoader;
     private textureLoader: TextureLoader;
     private rayCaster: Raycaster;
+
     private outlinePass: OutlinePass;
     private composer: EffectComposer;
 
@@ -714,5 +719,6 @@ export {
     PointLight,
     DataTexture,
     RGBAFormat,
-    FloatType
+    FloatType,
+    Frustum
 };

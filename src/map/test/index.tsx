@@ -8,12 +8,16 @@ import {
     ConeGeometry,
     DirectionalLight,
     DoubleSide,
+    DynamicDrawUsage,
     EdgesGeometry,
     Float32BufferAttribute,
     FrontSide,
     IcosahedronGeometry,
+    InstancedBufferGeometry,
+    InstancedMesh,
     LineBasicMaterial,
     LineSegments,
+    LOD,
     Matrix4,
     Mesh,
     MeshPhongMaterial,
@@ -23,13 +27,15 @@ import {
     Quaternion,
     Raycaster,
     Scene,
+    ShaderMaterial,
     SphereGeometry,
+    Spherical,
     Vector2,
     Vector3,
     WebGLRenderer,
 } from "three";
 import CustomShaderMaterial from "three-custom-shader-material/vanilla";
-import { OrbitControls, MapControls } from "three/examples/jsm/Addons.js";
+import { OrbitControls, MapControls, GLTFLoader } from "three/examples/jsm/Addons.js";
 
 import vert from "./vert.glsl";
 import frag from "./frag.glsl";
@@ -37,6 +43,9 @@ import { MeshPhongNodeMaterial } from "three/webgpu";
 
 import { SphereOrbitControlsBack } from "../orbit";
 import { MeshBVH } from "three-mesh-bvh";
+import Stats from "three/addons/libs/stats.module.js";
+
+import { SimplifyModifier } from "three/addons/modifiers/SimplifyModifier.js";
 
 const min_dis = 30;
 
@@ -61,37 +70,20 @@ export default function Test() {
         //     canvas.setPointerCapture(e.pointerId)
         //     console.log(e.pointerId, e.pointerType);
         // });
-        canvas.addEventListener("pointermove", (event) => {
-            if (!camera || !plane) return
-            const rect = canvas.getBoundingClientRect();
-
-            const x = ((event.clientX - rect.left) * canvas.width) / rect.width;
-            const y = ((event.clientY - rect.top) * canvas.height) / rect.height;
-
-            const ndc = {
-                x: (x / canvas.width) * 2 - 1,
-                y: (y / canvas.height) * -2 + 1,
-            };
-
-            rayCaster.setFromCamera(new Vector2(ndc.x, ndc.y), camera)
-
-            const objs = rayCaster.intersectObject(plane, true)
-            if (objs.length > 0) {
-                const o = objs[0]
-                console.log(o.point)
-            }
-        });
+        canvas.addEventListener("pointermove", (event) => {});
         // canvas.addEventListener("pointerup", (e) => {
         //     console.log(e.pointerId, e.pointerType);
         // });
     }, []);
 
     const run = () => {
+        const stats = new Stats();
         const canvas = canvasRef.current;
+        canvas.parentElement.appendChild(stats.dom);
         const renderer = new WebGLRenderer({ antialias: true, canvas });
         scene = new Scene();
 
-        camera = new PerspectiveCamera(75, 1.5, 0.1, 500);
+        camera = new PerspectiveCamera(75, 1.5, 0.1, 50000);
         camera.position.set(0, 0, 50);
         const controls = new SphereOrbitControlsBack(camera, canvas);
         controls.enableDamping = false;
@@ -107,283 +99,153 @@ export default function Test() {
         const axis = new AxesHelper(15);
         scene.add(axis);
 
-        const planeGeo = new PlaneGeometry(5, 5, 10, 10);
-        const elevations: number[] = [];
-        const count = planeGeo.getAttribute("position").count;
-        for (let i = 0; i < count; i++) {
-            elevations.push(Math.random() * 2);
+        {
+            const count = 2;
+            const geo = new InstancedBufferGeometry();
+            geo.instanceCount = count;
+            const positions: number[] = [];
+            positions.push(10, 0, 0, 0, 10, 0, 0, 0, 10);
+            geo.setAttribute("position", new Float32BufferAttribute(positions, 3));
+
+            const mat = new ShaderMaterial({
+                side: DoubleSide,
+                vertexShader: /* glsl*/ `
+                    varying float vID;
+                    void main() {
+                        vec3 pos  = position;
+                        pos.y += sin(pos.x);
+                        gl_Position = projectionMatrix * viewMatrix * modelMatrix * instanceMatrix * vec4(pos, 1.0);
+
+                        vID = float(gl_InstanceID);
+                    }
+                `,
+                fragmentShader: /*glsl */ `
+                    varying float vID;
+                    void main() {
+                        vec3 color = mix(vec3(1.), vec3(1.0, 0., 0.), vID);
+                        gl_FragColor = vec4(color, 1.);
+                    }
+                `,
+            });
+
+            const mesh = new InstancedMesh(geo, mat, count);
+            // scene.add(mesh);
+            mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+
+            for (let i = 0; i < count; i++) {
+                const matrix = new Matrix4();
+                const position = new Vector3(10 * Math.random(), 10 * Math.random(), 10 * Math.random());
+                const quat = new Quaternion().random();
+                const scale = new Vector3(1, 1, 1);
+                matrix.compose(position, quat, scale);
+                mesh.setMatrixAt(i, matrix);
+            }
+
+            setTimeout(() => {
+                const matrix = new Matrix4();
+                const position = new Vector3(10 * Math.random(), 10 * Math.random(), 10 * Math.random());
+                const quat = new Quaternion().random();
+                const scale = new Vector3(1, 1, 1);
+                matrix.compose(position, quat, scale);
+
+                mesh.setMatrixAt(1, matrix);
+                mesh.instanceMatrix.needsUpdate = true;
+            }, 2000);
         }
-        planeGeo.setAttribute("elevation", new Float32BufferAttribute(elevations, 1));
 
-        planeGeo.boundsTree = new MeshBVH(planeGeo)
+        const loader = new GLTFLoader();
 
-        plane = new Mesh(
-            planeGeo,
-            new CustomShaderMaterial({
-                baseMaterial: MeshPhongMaterial,
-                color: 0x00ff00,
-                // wireframe: true,
-                vertexShader: /* glsl */ `
-                attribute float elevation;
-                void main() {
-                    csm_Position.xyz += normal * elevation;
+        const simp = new SimplifyModifier();
+
+        loader.load("http://localhost:12345/fuck/quiver_tree_02_1k.gltf", (gltf) => {
+            const tree = gltf.scene;
+
+            const mesh = tree.children[0] as Mesh;
+            mesh.scale.set(100, 100, 100);
+            const geo = mesh.geometry;
+            const mat = mesh.material;
+            // mat.wireframe = true
+            // const lod = new LOD()
+
+            // const vertCount = geo.getAttribute("position").count;
+
+            // // 我真的会操雪，这个第二个参数 count需要int，是需要删掉的顶点，不是保留的顶点
+            // const medium = simp.modify(geo, Math.floor(vertCount * 0.9))
+            // const mediumCount = medium.getAttribute("position").count
+            // const low = simp.modify(medium, Math.floor(mediumCount * 0.9))
+
+            // const lowMesh = new Mesh(low, mat)
+            // const mediumMesh = new Mesh(medium, mat)
+            // lowMesh.scale.set(100, 100, 100);
+            // mediumMesh.scale.set(100, 100, 100);
+
+            // lod.addLevel(mesh, 30)
+            // lod.addLevel(mediumMesh, 100)
+            // lod.addLevel(lowMesh, 200)
+
+            // scene.add(lod)
+
+            {
+                const count = 1000;
+                const inMesh = new InstancedMesh(geo, mat, count);
+                inMesh.count = 100
+                const sphere = new Mesh(
+                    new SphereGeometry(10, 10, 10),
+                    new MeshPhongMaterial({ color: 0x00ff00, wireframe: true })
+                );
+
+                scene.add(sphere);
+                scene.add(inMesh);
+
+                inMesh.instanceMatrix.setUsage(DynamicDrawUsage);
+
+                // 对于其他的mesh，会自动做视锥剔除，但是
+                // 我操穴，instancedMesh无法做单个实例的视锥剔除
+                // 如果这些instance有一个在视锥内，就会渲染全部实例
+                // 导致性能降低
+                // inMesh.frustumCulled = false
+
+                const matrix = new Matrix4();
+                const yp = new Vector3(0, 1, 0);
+                const sph = new Spherical(10, 0, 0);
+                for (let i = 0; i < count; i++) {
+                    // sph.theta = Math.random() * Math.PI * 2;
+                    // sph.phi = Math.random() * Math.PI
+                    const pos = new Vector3().setFromSpherical(sph);
+                    const quat = new Quaternion().setFromUnitVectors(yp, pos.clone().normalize());
+                    matrix.compose(new Vector3(100000, 0, 0), quat, new Vector3(3, 3, 3));
+
+                    inMesh.setMatrixAt(i, matrix);
                 }
-            `,
-            })
-        );
-        plane.position.x = 10
-        scene.add(plane);
 
-        // const box = new Mesh(new BoxGeometry(10, 10, 10), new MeshPhongMaterial({ color: 0x00ff00 }));
-        // scene.add(box);
-        // box.add(axis.clone());
-        // box.translateX(10);
+                setTimeout(() => {
+                    sph.theta = Math.PI;
+                    sph.phi = Math.PI / 2;
+                    const pos = new Vector3().setFromSpherical(sph);
+                    const quat = new Quaternion().setFromUnitVectors(yp, pos.clone().normalize());
+                    matrix.compose(pos, quat, new Vector3(3, 3, 3));
+                    // matrix.setPosition(pos)
 
-        // const sphere = new Mesh(new IcosahedronGeometry(10), new MeshPhongMaterial({ color: 0xff0000 }))
-        // scene.add(sphere)
+                    inMesh.setMatrixAt(0, matrix);
 
-        // // controls.target.set(0, 10, 0)
-        // controls.minPolarAngle = 0
-        // controls.maxPolarAngle = Math.PI / 2
-        // controls.minAzimuthAngle = 0
-        // controls.maxAzimuthAngle = 0
-        // controls.update()
+                    inMesh.instanceMatrix.needsUpdate = true;
+                    inMesh.computeBoundingSphere();
+                }, 2000);
+            }
 
-        // controls.addEventListener("end", () => {
-        //     console.log(controls.target.toArray())
-        // })
-
-        // setTimeout(() => {
-        //     const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4);
-        //     box.quaternion.copy(q);
-
-        //     camera.rotateX(Math.PI / 5);
-
-        //     console.log(camera.up);
-
-        //     setTimeout(() => {
-        //         const q = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 4);
-        //         box.quaternion.copy(q.invert());
-        //     }, 2000);
-        // }, 2000);
-
-        // const radius = 15;
-        // controls.minDistance = radius + 1;
-        // const material = new CustomShaderMaterial({
-        //     baseMaterial: MeshPhongMaterial,
-        //     color: 0x00ff00,
-        //     wireframe: true,
-        //     vertexShader: /* glsl */ `
-        //         attribute float elevation;
-
-        //         void main() {
-        //             csm_Position += normal * elevation;
-        //         }
-        //     `,
-        //     fragmentShader: /* glsl */ `
-
-        //     `,
-        // });
-
-        // const geometry = new SphereGeometry(radius, 50, 50);
-        // const elevations: number[] = [];
-        // const count = geometry.getAttribute("position").count;
-        // for (let i = 0; i < count; i++) {
-        //     elevations.push(Math.random());
-        // }
-        // geometry.setAttribute("elevation", new Float32BufferAttribute(elevations, 1));
-
-        // const sphere = new Mesh(geometry, material);
-
-        // const cone = new Mesh(
-        //     new ConeGeometry(radius, 10, 50),
-        //     new MeshPhongMaterial({
-        //         color: 0x00ff00,
-        //         wireframe: true,
-        //     })
-        // );
-
-        // scene.add(sphere);
-
-        // let i = 1
-
-        // setInterval(() => {
-        //     const v = Math.pow(-1, i)
-        //     // camera.up.set(0, 10 * v, 0)
-        //     // camera.lookAt(0, 0, 0)
-
-        //     // const { x, y, z } = camera.position
-        //     // console.log(x, y, z)
-        //     camera.rotation.set(1, 1, 1)
-        //     controls.update()
-        //     console.log(camera.up.toArray())
-        //     i++
-        // }, 1000);
-
-        controls.addEventListener("change", () => {
-            // const pos = camera.position;
-            // const length = pos.length()
-            // const toSurface = length - radius;
-            // if (toSurface > 20) {
-            //     controls.target.set(0, 0, 0)
-            //     return
+            // for (let i = 0; i < 10; i++) {
+            //     const quaternion = new Quaternion().setFromUnitVectors(start, new Vector3(Math.random(), 1, 1).normalize());
+            //     const t = tree.clone().applyQuaternion(quaternion);
+            //     t.position.set(Math.random() * 10, Math.random(), Math.random())
+            //     scene.add(t);
             // }
-            // const transition = (1 - (toSurface / 20)) * MAX
-            // const vertical = new Vector3(0, length / Math.tan(transition), 0)
-            // const target = vertical.clone().sub(pos).normalize().multiplyScalar(10)
-            // // const sp = pos.clone().normalize().multiplyScalar(radius)
-            // // const normal = sp.clone().normalize()
-            // // const forward = 10 * transition
-            // // const tp = sp.clone().add(new Vector3(normal.x * forward, normal.y * forward, normal.z * forward))
-            // // const ct = new Vector3()
-            // // ct.lerpVectors(new Vector3(0, 0, 0), tp, Math.pow(transition, 2))
-            // controls.target.copy(target)
         });
-
-        // controls.addEventListener("end", () => {
-        //     const dis = camera.position.length() - radius;
-        //     console.log(low_height, dis)
-        //     if (dis < min_dis && !low_height) {
-        //         controls.target.copy(camera.position.clone().normalize().multiplyScalar(radius));
-
-        //         controls.enablePan = true;
-        //         controls.minPolarAngle = Math.PI / 3;
-        //         controls.minAzimuthAngle = 0
-        //         controls.maxAzimuthAngle = 0;
-        //         controls.minDistance = 1;
-        //         controls.update();
-        //         low_height = true
-        //     }
-
-        //     if (dis > min_dis && low_height) {
-        //         controls.target.copy(new Vector3(0, 0, 0));
-        //         controls.enablePan = false;
-        //         controls.minPolarAngle = 0;
-        //         controls.minAzimuthAngle = Infinity
-        //         controls.maxAzimuthAngle = Infinity
-        //         controls.minDistance = radius + 1;
-        //         controls.update();
-        //         low_height = false
-        //     }
-        // });
-
-        // const axies = new AxesHelper(20);
-        // const axies1 = new AxesHelper(5);
-        // scene.add(axies);
-
-        // const points = [2, 0, 0, 0, 2, 0, 0, 0, 2, 3, 3,3];
-        // const geo = new BufferGeometry();
-        // geo.setIndex([0, 1, 2, 1, 2, 3])
-        // geo.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-        // const mesh = new Mesh(
-        //     geo,
-        //     new MeshPhongMaterial({
-        //         color: 0xff0000,
-        //         side: DoubleSide,
-        //     })
-        // );
-        // mesh.add(axies1);
-        // scene.add(mesh);
-
-        // mesh.position.set(3, 3, 3);
-        // mesh.rotation.set(0.5, 0.5, 0.5)
-
-        // mesh.rotation.y = 0.5;
-
-        // geo.translate(-3, -3, -3);
-
-        // const plane = new Mesh(new PlaneGeometry(5, 5, 10, 10), new MeshPhysicalMaterial({ color: 0xff0000 }));
-
-        // plane.rotation.y = 0.4
-
-        // const sphere = new Mesh(new SphereGeometry(10, 20, 20), new MeshPhysicalMaterial({ color: 0x00ff00, wireframe: true }));
-
-        // scene.add(plane, sphere)
-
-        // const n = new Vector3(1, 1, 1).normalize()
-        // const p = new Vector3(6, 6, 6)
-
-        // const matrix = new Matrix4()
-        // matrix.compose(p, new Quaternion().setFromUnitVectors(new Vector3(0, 0, 1), n), new Vector3(1, 1, 1))
-        // plane.applyMatrix4(matrix)
-
-        // const targetP = new Vector3(5, 5, 5);
-        // const n = new Vector3(2, 2, 2).normalize();
-
-        // const plane = new Mesh(
-        //     new PlaneGeometry(5, 5, 10, 10),
-        //     new MeshPhongMaterial({
-        //         color: 0xffffff,
-        //         wireframe: true,
-        //         side: FrontSide
-        //     })
-        // );
-        // scene.add(plane);
-        // plane.add(axies1)
-        // // plane.add(axies.clone())
-
-        // const origin = new Vector3(0, 0, 10)
-
-        // plane.position.copy(origin)
-
-        // const clonePlane = plane.clone()
-
-        // clonePlane.position.set(5, 5, 5)
-
-        // clonePlane.rotation.y = 0.5
-
-        // clonePlane.scale.x = 2
-
-        // scene.add(clonePlane)
-
-        // setTimeout(() => {
-        //     const matrix = new Matrix4();
-        //     // matrix.compose(targetP, new Quaternion().setFromUnitVectors(new Vector3(0, 0, 1), n), new Vector3(1, 1, 1));
-        //     // plane.applyMatrix4(clonePlane.matrix.clone());
-        //     // plane.applyMatrix4(clonePlane.matrix.clone())
-        //     clonePlane.matrix.decompose(plane.position, plane.quaternion, plane.scale)
-
-        //     // plane.position.set(5, 5, 5)
-
-        //     console.log(plane.position, clonePlane.position)
-        // }, 2000);
-
-        // const geometry = new IcosahedronGeometry(10, 32)
-        // const count = geometry.getAttribute("position").count
-        // const elevations: number[] = []
-        // const face: number[] = []
-        // let elevation = 0
-        // let faceIndex = 0
-        // for (let i = 0; i < count; i++) {
-        //     if (i % 3 === 0) {
-        //         elevation = Math.random() * 2.0
-        //         faceIndex = Math.round(i / 3)
-        //     }
-
-        //     elevations.push(elevation)
-        //     face.push(faceIndex)
-        // }
-        // geometry.setAttribute("elevation", new BufferAttribute(new Float32Array(elevations), 1))
-        // geometry.setAttribute("face", new BufferAttribute(new Float32Array(face), 1))
-
-        // const material = new CustomShaderMaterial({
-        //     baseMaterial: MeshPhongMaterial,
-        //     color: 0x00ff00,
-        //     wireframe: true,
-        //     vertexShader: vert,
-        //     fragmentShader: frag
-        // })
-
-        // const mesh = new Mesh(geometry, material)
-        // scene.add(mesh)
-
-        // const line = new LineSegments(new EdgesGeometry(geometry), new LineBasicMaterial({ color: 0x0000ff }))
-        // scene.add(line)
 
         renderer.setAnimationLoop(() => {
             renderer.render(scene, camera);
             // controls.update();
             // mesh.rotation.y += 0.1
+            stats.update();
         });
     };
 
