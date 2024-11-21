@@ -79,6 +79,7 @@ import {
     MapInitStatus,
     UV,
     XColor,
+    ZoneData,
 } from "./types";
 
 import tileFrag from "./shader/tile/frag.glsl";
@@ -92,7 +93,13 @@ import lensflare0 from "../assets/lensflare0.png";
 import lensflare3 from "../assets/lensflare3.png";
 import { elevationPointerDown, elevationPointerMove, elevationPointerUp } from "./elevation";
 import { mountainPointerDown, mountainPointerMove, mountainPointerUp } from "./mountain";
-import { createVegetationInstance, vegetationPointerDown, vegetationPointerMove, vegetationPointerUp } from "./vegetation";
+import {
+    createVegetationInstance,
+    vegetationPointerDown,
+    vegetationPointerMove,
+    vegetationPointerUp,
+} from "./vegetation";
+import { QuadTreeNode } from "./zone";
 
 /** 操作地图数据的对象 */
 let mapBytesUtils: MapBytesUtils = null;
@@ -124,20 +131,28 @@ const mapClickStartPos = { x: 0, y: 0 };
 /** 点击结束位置canvas 坐标 */
 const mapClickEndPos = { x: 0, y: 0 };
 
+/** 网格球体半径，用的太多存下来 */
 let earthRadius: number = undefined;
 
 /** 大地球 */
 let earth: Mesh = null;
 
-/**
- * 分区内的所有格子索引 zonekey -> [0, 1, 2, 3, 4, ...]
- * 保存该该格子在全部格子下的索引
- * 数据初始化后不再改变
- */
-const zoneTileIndicesMap: GISZoneTileIndicesMap = new Map();
+/** 所有的分区映射 */
+const zoneMap: Map<string, ZoneData> = new Map();
 
+/** 四叉树，方便快速检索 */
+let quadTree: QuadTreeNode = null;
+
+/**
+ * 分区内的所有格子索引 zone key -> [0, 1, 2, 3, 4, ...]
+ * 保存该该格子在全部格子下的索引，数据初始化后不再改变
+ */
+const zoneTileIndicesMap: Map<string, number[]> = new Map();
+
+/** 分区key -> 分区mesh */
 const zoneMeshMap: Map<string, Mesh> = new Map();
 
+/** 存放所有分区 mesh */
 const zoneMeshGroup = new Group();
 
 /** 所有tileIdnex -> vertex[] */
@@ -176,6 +191,7 @@ const mapInitStatus: MapInitStatus = { loadPercent: 0 };
 
 // const time = new Uniform(0);
 
+/** 性能观察 */
 let stats: Stats = null;
 
 /** 自定义当前的缩放层级 */
@@ -290,9 +306,13 @@ export async function initMap() {
 
     createLight();
 
+    initZone()
+
+    initQuadTreeNode()
+
     await loadTestTree();
 
-    createVegetationInstance()
+    createVegetationInstance();
 
     onCanvasEvent(manager.getRenderer().domElement);
 
@@ -354,7 +374,8 @@ function setTiltCamera() {
             dis = pos.clone().sub(controls.target).length();
         }
         const angle =
-            controls._tiltMaxAngle * (1 - (dis - CAMEARA_TO_EARTH_MIN_DIS) / (minDis - CAMEARA_TO_EARTH_MIN_DIS));
+            controls._tiltMaxAngle *
+            (1 - (dis - CAMEARA_TO_EARTH_MIN_DIS) / (minDis - CAMEARA_TO_EARTH_MIN_DIS));
 
         if (!isLowHeight) {
             controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS;
@@ -427,7 +448,9 @@ function registerControlEvent() {
             const dis = camera.position.length();
             camera.far = dis;
             if (zoom >= EDIT_ZOOM) {
-                camera.far = dis / 2;
+                // camera.far = dis / 5;
+                // 预估最多看得到100个单位
+                camera.far = 100;
             }
             camera.updateProjectionMatrix();
 
@@ -602,7 +625,7 @@ function pointerDown(e: PointerEvent) {
 
     elevationPointerDown(e);
     mountainPointerDown(e);
-    vegetationPointerDown(e)
+    vegetationPointerDown(e);
 }
 
 function pointerMove(e: PointerEvent) {
@@ -611,7 +634,7 @@ function pointerMove(e: PointerEvent) {
 
     elevationPointerMove(e);
     mountainPointerMove(e);
-    vegetationPointerMove(e)
+    vegetationPointerMove(e);
 }
 
 function pointerUp(e: PointerEvent) {
@@ -619,11 +642,11 @@ function pointerUp(e: PointerEvent) {
 
     elevationPointerUp(e);
     mountainPointerUp(e);
-    vegetationPointerUp(e)
+    vegetationPointerUp(e);
 }
 
 function getLatlng(e: PointerEvent) {
-    return;
+    return
     const ndc = manager.getCanvasNDC(e);
     let point: Vector3 = null;
 
@@ -734,7 +757,14 @@ function getTileUV(tileIndex: number) {
 
     corners.forEach((v) => {
         const { x, y, z } = meshBytesUtils.getCornerByIndex(v);
-        const uv = calcVertexUV([leftU, bottomV], deltaU, deltaV, new Vector3(x, y, -z), center, north);
+        const uv = calcVertexUV(
+            [leftU, bottomV],
+            deltaU,
+            deltaV,
+            new Vector3(x, y, -z),
+            center,
+            north
+        );
         uvs.push(...uv);
     });
 
@@ -1061,7 +1091,10 @@ async function preprocessInstanceTiles() {
                 // matrix.makeRotationFromQuaternion(new Quaternion().random())
                 matrix.compose(
                     new Vector3(0, 0, 0),
-                    new Quaternion().setFromUnitVectors(first5Center, new Vector3(x, y, -z).normalize()),
+                    new Quaternion().setFromUnitVectors(
+                        first5Center,
+                        new Vector3(x, y, -z).normalize()
+                    ),
                     new Vector3(1, 1, 1)
                 );
                 first5Mesh.setMatrixAt(p5, matrix);
@@ -1072,7 +1105,10 @@ async function preprocessInstanceTiles() {
                 // matrix.makeRotationFromQuaternion(new Quaternion().random())
                 matrix.compose(
                     new Vector3(0, 0, 0),
-                    new Quaternion().setFromUnitVectors(first6Center, new Vector3(x, y, -z).normalize()),
+                    new Quaternion().setFromUnitVectors(
+                        first6Center,
+                        new Vector3(x, y, -z).normalize()
+                    ),
                     new Vector3(1, 1, 1)
                 );
                 first6Mesh.setMatrixAt(p6, matrix);
@@ -1374,14 +1410,15 @@ export function createComplexTileGeometry(op: {
     if (count === 6) {
         // 正六边形再次细分为18个三角面
         geometry.setIndex([
-            0, 1, 7, 0, 7, 6, 1, 2, 8, 1, 8, 7, 2, 3, 9, 2, 9, 8, 3, 4, 10, 3, 10, 9, 4, 11, 10, 4, 5, 11, 5, 6, 11, 5,
-            0, 6, 6, 7, 12, 7, 8, 12, 8, 9, 12, 9, 10, 12, 10, 11, 12, 11, 6, 12,
+            0, 1, 7, 0, 7, 6, 1, 2, 8, 1, 8, 7, 2, 3, 9, 2, 9, 8, 3, 4, 10, 3, 10, 9, 4, 11, 10, 4,
+            5, 11, 5, 6, 11, 5, 0, 6, 6, 7, 12, 7, 8, 12, 8, 9, 12, 9, 10, 12, 10, 11, 12, 11, 6,
+            12,
         ]);
     } else {
         // 正五边形细分为15个三角面
         geometry.setIndex([
-            0, 1, 6, 0, 6, 5, 1, 2, 7, 1, 7, 6, 2, 3, 8, 2, 8, 7, 3, 4, 9, 3, 9, 8, 4, 5, 9, 4, 0, 5, 5, 6, 10, 6, 7,
-            10, 7, 8, 10, 8, 9, 10, 9, 5, 10,
+            0, 1, 6, 0, 6, 5, 1, 2, 7, 1, 7, 6, 2, 3, 8, 2, 8, 7, 3, 4, 9, 3, 9, 8, 4, 5, 9, 4, 0,
+            5, 5, 6, 10, 6, 7, 10, 7, 8, 10, 8, 9, 10, 9, 5, 10,
         ]);
     }
 
@@ -1585,7 +1622,9 @@ export function setZoom(_zoom: number) {
 export function isClickCanvas() {
     if (
         mapClickEndTime - mapClickStartTime < MAX_CLICKING_TIME &&
-        (mapClickEndPos.x - mapClickStartPos.x) ** 2 + (mapClickEndPos.y - mapClickStartPos.y) ** 2 < MAX_MOVE_DELTA_SQA
+        (mapClickEndPos.x - mapClickStartPos.x) ** 2 +
+            (mapClickEndPos.y - mapClickStartPos.y) ** 2 <
+            MAX_MOVE_DELTA_SQA
     ) {
         return true;
     }
@@ -1972,7 +2011,10 @@ function isAdjacentZones(zone1: GISZone, zone2: GISZone) {
     const [zLat1, zLng1] = zone1;
     const [zLat2, zLng2] = zone2;
 
-    if (Math.abs(zLat1 - zLat2) <= 1 && (Math.abs(zLng1 - zLng2) <= 1 || Math.abs(zLng1 - zLng2) === LNG_SLICES - 1)) {
+    if (
+        Math.abs(zLat1 - zLat2) <= 1 &&
+        (Math.abs(zLng1 - zLng2) <= 1 || Math.abs(zLng1 - zLng2) === LNG_SLICES - 1)
+    ) {
         return true;
     }
 
@@ -2084,7 +2126,13 @@ export function getZoneBox(zone: GISZone) {
         right = -lng * LNG_DIVIDER;
     }
 
-    return { left, right, top, bottom, center: { lat: (top + bottom) / 2, lng: (left + right) / 2 } };
+    return {
+        left,
+        right,
+        top,
+        bottom,
+        center: { lat: (top + bottom) / 2, lng: (left + right) / 2 },
+    };
 }
 
 /** 移动相机到该坐标上 */
@@ -2192,7 +2240,11 @@ export function mixValue(v0: number, v1: number, t: number) {
  * @param style 遮罩样式，如果给出了 lineWidth，则基于边界绘制线，可能有多个闭合边界
  * @param detail 可细粒度控制遮罩的单个格子样式 tileindex -> style
  */
-export function createMask(tileIndices: Set<number>, style?: LayerStyle, detail?: Record<number, LayerStyle>) {
+export function createMask(
+    tileIndices: Set<number>,
+    style?: LayerStyle,
+    detail?: Record<number, LayerStyle>
+) {
     if (tileIndices.size === 0) return {};
     const { color = [1, 0, 0, 0.4] } = style || {};
     const _detail = detail || {};
@@ -2278,4 +2330,97 @@ export async function loadTestTree() {
 
 export function getTestTree() {
     return testTree;
+}
+
+/**
+ * ##为了快速定位，采取地理坐标分区，初始化地图时先调用
+ *
+ * 采用东西经度从本初子午线 0° 开始，每隔开一定经度划一个经度大区，
+ * 从 0 ~ 360 依次标为 1 2 3 4 5 ...
+ *
+ * 在每个经度大区里，从南极点 -90° 开始在南北纬隔开一定经度划一个纬度大区，
+ * 从 -90~90 依次标为 1 2 3 4 5 ...
+ *
+ * 如何定位一个区？采用二元数定位，并按照先纬度后经度的惯例
+ * 比如 [1, 2] 代表纬度分区1和经度分区2的分区
+ *
+ * 需要特别注意的坑爹地方是(我真的会淦铊🐎)：
+ *
+ * threejs用的是右手坐标系，而unity用的是左手坐标系
+ * 通常只需把unity坐标的 z 坐标反向就能放到threejs坐标体系下
+ *
+ * 还有一点比较坑爹的是，unity的0度经线是 x+，经度从 x 轴正向开始逆时针增加经度
+ * 而threejs 0度经线是z+，通常是从 z+ 正向开始逆时针增加经度
+ */
+function initZone() {
+    for (let lng = 1; lng <= LNG_SLICES; lng++) {
+        for (let lat = 1; lat <= LAT_SLICES; lat++) {
+            const zone: GISZone = [lat, lng];
+            const key = getZoneKey(zone);
+            const { left, right, top, bottom, center } = getZoneBox(zone);
+            zoneMap.set(key, {
+                zone,
+                bounds: {
+                    lonMin: left,
+                    lonMax: right,
+                    latMin: bottom,
+                    latMax: top,
+                    center,
+                },
+            });
+        }
+    }
+}
+
+/** 初始化四叉树节点，初始节点覆盖整个地图 */
+function initQuadTreeNode() {
+    // 初始节点覆盖整个地球
+    quadTree = new QuadTreeNode(
+        {
+            lonMin: -180,
+            lonMax: 180,
+            latMin: -90,
+            latMax: 90,
+        },
+        manager,
+        earthRadius
+    );
+
+    // 插入所有分区到节点
+    for (const [_, zone] of zoneMap) {
+        quadTree.insert(zone);
+    }
+}
+
+/** 获取相机视锥体 */
+function getCameraFrustum() {
+    const camera = manager.camera;
+    const frustum = new Frustum();
+    frustum.setFromProjectionMatrix(
+        new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+    );
+
+    return frustum
+}
+
+function getVisibleZone(frustum: Frustum) {
+    if (!quadTree) return;
+
+    // return quadTree.query(frustum)
+
+    // 不要用根节点去检查
+    // 根节点的box是连接南北两极的条状
+    // 只有当相机的far比较远时才会有交点
+    // 对于这个项目反而不适用
+    // 直接使用子节点去检查
+
+    const children = quadTree.children
+    const result: ZoneData[] = []
+
+    for (const child of children) {
+        const res = child.query(frustum)
+        result.push(...res)
+    }
+
+    return result
 }

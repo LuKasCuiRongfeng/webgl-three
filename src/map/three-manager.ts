@@ -89,7 +89,8 @@ import {
     DataTexture,
     RGBAFormat,
     FloatType,
-    Frustum
+    Frustum,
+    Sphere,
 } from "three";
 
 // import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -104,7 +105,7 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 // import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
-import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js"
+import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
 
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { MeshBVH, acceleratedRaycast } from "three-mesh-bvh";
@@ -120,6 +121,7 @@ import Stats from "three/addons/libs/stats.module.js";
 import CustomShaderMaterial from "three-custom-shader-material/vanilla";
 
 import { SphereOrbitControls } from "./sphereOrbit";
+import { SimplifyModifier } from "three/addons/modifiers/SimplifyModifier.js";
 // ----------------------------------------------------
 // ----------------------------------------------------
 // ----------------------------------------------------
@@ -157,6 +159,8 @@ class ThreeManager {
      * 都需要从新创建tween
      */
     private cameraTween: Tween<Vector3>;
+
+    private simplifyModifier: SimplifyModifier;
 
     constructor(parameters?: WebGLRendererParameters) {
         this.renderer = new WebGLRenderer(parameters);
@@ -238,10 +242,18 @@ class ThreeManager {
      * @param duration 持续视角
      * @param autoStart 动画自动执行，默认true
      */
-    createCameraSphereQuaternionTween(_start: Vector3, end: Vector3, duration = 300, autoStart = true) {
+    createCameraSphereQuaternionTween(
+        _start: Vector3,
+        end: Vector3,
+        duration = 300,
+        autoStart = true
+    ) {
         // tween必须重新创建
         const q1 = this.camera.quaternion;
-        const q2 = new Quaternion().setFromUnitVectors(new Vector3(0, 0, 1), end.clone().normalize());
+        const q2 = new Quaternion().setFromUnitVectors(
+            new Vector3(0, 0, 1),
+            end.clone().normalize()
+        );
         const tween = new Tween(q1);
         tween.to(q2, duration);
 
@@ -358,7 +370,11 @@ class ThreeManager {
     getOutlinePass() {
         if (this.outlinePass == undefined) {
             const canvas = this.renderer.domElement;
-            this.outlinePass = new OutlinePass(new Vector2(canvas.width, canvas.height), this.scene, this.camera);
+            this.outlinePass = new OutlinePass(
+                new Vector2(canvas.width, canvas.height),
+                this.scene,
+                this.camera
+            );
 
             this.getComposer().addPass(this.outlinePass);
         }
@@ -621,6 +637,74 @@ class ThreeManager {
             lng: (lng / Math.PI) * 180,
         };
     }
+
+    /**
+     * 精简三角面，可以选中配合 LOD 优化体验
+     * @param geometry 需要被精简的geometry
+     * @param ratio 精简比例，范围 0 ~ 1，值越大越精简
+     */
+    simplifyMesh(geometry: BufferGeometry, ratio = 0.5) {
+        if (!this.simplifyModifier) {
+            this.simplifyModifier = new SimplifyModifier();
+        }
+
+        const count = geometry.getAttribute("position").count;
+        const removeCount = Math.floor(count * ratio);
+
+        return this.simplifyModifier.modify(geometry, removeCount);
+    }
+
+    /**
+     * instancedMesh的视锥实例剔除
+     * @param mesh instancedMesh
+     * @param instancedCount 最大数量
+     * @param frustum 视锥
+     * @param radius 预估实例包围球半径
+     */
+    frustumCulledInstance(
+        mesh: InstancedMesh,
+        instancedCount: number,
+        frustum: Frustum,
+        radius = 1
+    ) {
+        const mat4Map: Map<number, Matrix4> = new Map();
+        // 包围球
+        const sphere = new Sphere();
+        sphere.radius = radius;
+
+        for (let i = 0; i < instancedCount; i++) {
+            const mat4 = new Matrix4();
+            mesh.getMatrixAt(i, mat4);
+
+            const pos = new Vector3();
+            const quat = new Quaternion();
+            const scale = new Vector3();
+            mat4.decompose(pos, quat, scale);
+
+            sphere.center.copy(pos);
+
+            if (frustum.intersectsSphere(sphere)) {
+                mat4Map.set(i, mat4);
+            }
+        }
+
+        // 为了简单，全部交换矩阵
+        let i = 0;
+        const size = mat4Map.size;
+        for (const [id, mat4] of mat4Map) {
+            const head = new Matrix4();
+            mesh.getMatrixAt(i, head);
+            mesh.setMatrixAt(i, mat4);
+            mesh.setMatrixAt(id, head);
+
+            i++;
+        }
+
+        // 修改渲染数量，只渲染视锥内的实例
+        mesh.count = size;
+
+        mesh.instanceMatrix.needsUpdate = true;
+    }
 }
 
 export default ThreeManager;
@@ -720,5 +804,7 @@ export {
     DataTexture,
     RGBAFormat,
     FloatType,
-    Frustum
+    Frustum,
+    Sphere,
+    SimplifyModifier,
 };

@@ -12,6 +12,7 @@ import {
     EdgesGeometry,
     Float32BufferAttribute,
     FrontSide,
+    Frustum,
     IcosahedronGeometry,
     InstancedBufferGeometry,
     InstancedMesh,
@@ -28,6 +29,7 @@ import {
     Raycaster,
     Scene,
     ShaderMaterial,
+    Sphere,
     SphereGeometry,
     Spherical,
     Vector2,
@@ -76,7 +78,7 @@ export default function Test() {
         // });
     }, []);
 
-    const run = () => {
+    const run = async () => {
         const stats = new Stats();
         const canvas = canvasRef.current;
         canvas.parentElement.appendChild(stats.dom);
@@ -157,95 +159,131 @@ export default function Test() {
 
         const simp = new SimplifyModifier();
 
-        loader.load("http://localhost:12345/fuck/quiver_tree_02_1k.gltf", (gltf) => {
-            const tree = gltf.scene;
+        const gltf = await loader.loadAsync("http://localhost:12345/fuck/quiver_tree_02_1k.gltf");
 
-            const mesh = tree.children[0] as Mesh;
-            mesh.scale.set(100, 100, 100);
-            const geo = mesh.geometry;
-            const mat = mesh.material;
-            // mat.wireframe = true
-            // const lod = new LOD()
+        const tree = gltf.scene;
 
-            // const vertCount = geo.getAttribute("position").count;
+        const mesh = tree.children[0] as Mesh;
+        mesh.scale.set(100, 100, 100);
+        const geo = mesh.geometry;
+        const mat = mesh.material;
+        // mat.wireframe = true
+        // const lod = new LOD()
 
-            // // 我真的会操雪，这个第二个参数 count需要int，是需要删掉的顶点，不是保留的顶点
-            // const medium = simp.modify(geo, Math.floor(vertCount * 0.9))
-            // const mediumCount = medium.getAttribute("position").count
-            // const low = simp.modify(medium, Math.floor(mediumCount * 0.9))
+        // const vertCount = geo.getAttribute("position").count;
 
-            // const lowMesh = new Mesh(low, mat)
-            // const mediumMesh = new Mesh(medium, mat)
-            // lowMesh.scale.set(100, 100, 100);
-            // mediumMesh.scale.set(100, 100, 100);
+        // // 我真的会操雪，这个第二个参数 count需要int，是需要删掉的顶点，不是保留的顶点
+        // const medium = simp.modify(geo, Math.floor(vertCount * 0.9))
+        // const mediumCount = medium.getAttribute("position").count
+        // const low = simp.modify(medium, Math.floor(mediumCount * 0.9))
 
-            // lod.addLevel(mesh, 30)
-            // lod.addLevel(mediumMesh, 100)
-            // lod.addLevel(lowMesh, 200)
+        // const lowMesh = new Mesh(low, mat)
+        // const mediumMesh = new Mesh(medium, mat)
+        // lowMesh.scale.set(100, 100, 100);
+        // mediumMesh.scale.set(100, 100, 100);
 
-            // scene.add(lod)
+        // lod.addLevel(mesh, 30)
+        // lod.addLevel(mediumMesh, 100)
+        // lod.addLevel(lowMesh, 200)
 
-            {
-                const count = 1000;
-                const inMesh = new InstancedMesh(geo, mat, count);
-                inMesh.count = 100
-                const sphere = new Mesh(
-                    new SphereGeometry(10, 10, 10),
-                    new MeshPhongMaterial({ color: 0x00ff00, wireframe: true })
-                );
+        // scene.add(lod)
 
-                scene.add(sphere);
-                scene.add(inMesh);
+        const count = 50000;
 
-                inMesh.instanceMatrix.setUsage(DynamicDrawUsage);
+        const inMesh = new InstancedMesh(geo, mat, count);
+        const sphere = new Mesh(
+            new SphereGeometry(10, 10, 10),
+            new MeshPhongMaterial({ color: 0x00ff00, wireframe: true })
+        );
 
-                // 对于其他的mesh，会自动做视锥剔除，但是
-                // 我操穴，instancedMesh无法做单个实例的视锥剔除
-                // 如果这些instance有一个在视锥内，就会渲染全部实例
-                // 导致性能降低
-                // inMesh.frustumCulled = false
+        scene.add(sphere);
+        scene.add(inMesh);
 
-                const matrix = new Matrix4();
-                const yp = new Vector3(0, 1, 0);
-                const sph = new Spherical(10, 0, 0);
-                for (let i = 0; i < count; i++) {
-                    // sph.theta = Math.random() * Math.PI * 2;
-                    // sph.phi = Math.random() * Math.PI
-                    const pos = new Vector3().setFromSpherical(sph);
-                    const quat = new Quaternion().setFromUnitVectors(yp, pos.clone().normalize());
-                    matrix.compose(new Vector3(100000, 0, 0), quat, new Vector3(3, 3, 3));
+        inMesh.instanceMatrix.setUsage(DynamicDrawUsage);
 
-                    inMesh.setMatrixAt(i, matrix);
+        // 对于其他的mesh，会自动做视锥剔除，但是
+        // 我操穴，instancedMesh无法做单个实例的视锥剔除
+        // 如果这些instance有一个在视锥内，就会渲染全部实例
+        // 导致性能降低
+        // inMesh.frustumCulled = false
+
+        const matrix = new Matrix4();
+        const yp = new Vector3(0, 1, 0);
+        const sph = new Spherical(10, 0, 0);
+        for (let i = 0; i < count; i++) {
+            // sph.theta = Math.random() * Math.PI * 2;
+            // sph.phi = Math.random() * Math.PI
+            const pos = new Vector3().setFromSpherical(sph);
+            const quat = new Quaternion().setFromUnitVectors(yp, pos.clone().normalize());
+            matrix.compose(new Vector3(100000, 0, 0), quat, new Vector3(3, 3, 3));
+
+            inMesh.setMatrixAt(i, matrix);
+        }
+
+        setTimeout(() => {
+            sph.theta = Math.PI;
+            sph.phi = Math.PI / 2;
+            const pos = new Vector3().setFromSpherical(sph);
+            const quat = new Quaternion().setFromUnitVectors(yp, pos.clone().normalize());
+            matrix.compose(pos, quat, new Vector3(3, 3, 3));
+            // matrix.setPosition(pos)
+
+            inMesh.setMatrixAt(11, matrix);
+
+            inMesh.instanceMatrix.needsUpdate = true;
+            inMesh.computeBoundingSphere();
+        }, 2000);
+
+        // 每次只渲染视锥内部的实例，实际上是和头部
+        // 的实例交互矩阵，可能还会交互其他属性，比如颜色
+        const frustum = new Frustum();
+        frustum.setFromProjectionMatrix(
+            new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+        );
+
+        function frustumCulledInstance() {
+            const matrix: Map<number, Matrix4> = new Map();
+            const sphere = new Sphere();
+            // 预估半径，可能不准
+            sphere.radius = 2
+
+            for (let i = 0; i < count; i++) {
+                const mat4 = new Matrix4();
+                inMesh.getMatrixAt(i, mat4);
+                const pos = new Vector3();
+                const quat = new Quaternion();
+                const scale = new Vector3();
+                mat4.decompose(pos, quat, scale);
+
+                sphere.center.copy(pos);
+                if (frustum.intersectsSphere(sphere)) {
+                    matrix.set(i, mat4);
                 }
-
-                setTimeout(() => {
-                    sph.theta = Math.PI;
-                    sph.phi = Math.PI / 2;
-                    const pos = new Vector3().setFromSpherical(sph);
-                    const quat = new Quaternion().setFromUnitVectors(yp, pos.clone().normalize());
-                    matrix.compose(pos, quat, new Vector3(3, 3, 3));
-                    // matrix.setPosition(pos)
-
-                    inMesh.setMatrixAt(0, matrix);
-
-                    inMesh.instanceMatrix.needsUpdate = true;
-                    inMesh.computeBoundingSphere();
-                }, 2000);
             }
 
-            // for (let i = 0; i < 10; i++) {
-            //     const quaternion = new Quaternion().setFromUnitVectors(start, new Vector3(Math.random(), 1, 1).normalize());
-            //     const t = tree.clone().applyQuaternion(quaternion);
-            //     t.position.set(Math.random() * 10, Math.random(), Math.random())
-            //     scene.add(t);
-            // }
-        });
+            // 为了简单，全部交换
+            let i = 0;
+            const size = matrix.size
+            for (const [id, mat4] of matrix) {
+                const head = new Matrix4();
+                inMesh.getMatrixAt(i, head);
+
+                inMesh.setMatrixAt(i, mat4);
+                inMesh.setMatrixAt(id, head);
+                i++;
+            }
+
+            inMesh.count = size;
+
+            inMesh.instanceMatrix.needsUpdate = true;
+        }
 
         renderer.setAnimationLoop(() => {
             renderer.render(scene, camera);
             // controls.update();
             // mesh.rotation.y += 0.1
             stats.update();
+            frustumCulledInstance();
         });
     };
 

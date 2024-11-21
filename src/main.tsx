@@ -7,6 +7,6 @@ import Test from "./map/test";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <Test />
+    <Map />
   </React.StrictMode>,
 );

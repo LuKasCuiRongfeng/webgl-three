@@ -100,3 +100,16 @@ export type LayerStyle = {
     /** 线宽，大于0 有效 */
     lineWidth?: number;
 };
+
+export type GeoBounds = {
+    lonMin: number;
+    lonMax: number;
+    latMin: number;
+    latMax: number;
+    center?: LatLng;
+};
+
+export type ZoneData = {
+    zone: GISZone,
+    bounds: GeoBounds
+}

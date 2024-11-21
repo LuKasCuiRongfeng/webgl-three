@@ -36,17 +36,21 @@ const leavedInstanceID = new Set<number>();
 
 let treeMesh: InstancedMesh = null;
 
+/** 单个视图下预估能看到的最大数量 */
+const maxCount = 5
+
 export function createVegetationInstance() {
-    // 预估每个分区放这么多
-    const count = 1000;
     // 假设第一个
     const tree = getTestTree().children[0] as Mesh;
-    treeMesh = new InstancedMesh(tree.geometry, tree.material, count);
+    // 先简化一下模型
+    const geo = getManager().simplifyMesh(tree.geometry, 0.98);
+    treeMesh = new InstancedMesh(geo, tree.material, maxCount);
+
     const matrix = new Matrix4()
     // 先全部移动到无限远处，代表看不见
     const pos = new Vector3(100000, 0, 0)
 
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < maxCount; i++) {
         leavedInstanceID.add(i);
         matrix.setPosition(pos.clone())
         treeMesh.setMatrixAt(i, matrix)
