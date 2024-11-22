@@ -9,12 +9,6 @@ export const GLOBAL_ALPHA = 1;
 /** 通用高亮透明度 */
 export const GLOBAL_HIGHTLIGHT_ALPHA = 1;
 
-/** 大地图通用格子数量 */
-export const BIG_MAP_TILECOUNT = 1600002;
-
-/** 被视为小地图的临界值 */
-export const MAP_MULTIPLE_THRESH = 3;
-
 /** 地图初始化状态 */
 export const MAP_INIT_STATUS: MapInitStatus = {
     checking: false,
@@ -24,16 +18,10 @@ export const MAP_INIT_STATUS: MapInitStatus = {
     stage: "process_tile",
 };
 
-/** 假设的多边形边长 */
-export const POLYGON_SIDE_LENGTH = 1;
+// --------------------------------------------------------
+// --------------------------------------------------------
+// ------------------ 地块编辑颜色配置 ----------------------------
 
-/** 小地图经线步长 */
-export const MINIMAP_LONGITUDE_STEP = 10;
-
-/** 小地图纬线步长 */
-export const MINIMAP_LATITUDE_STEP = 10;
-
-/** 允许的地块颜色 */
 export const ALLOWED_TILE_COLOR: XColor = [0, 1, 0, 1];
 
 export const ALLOWED_TILE_WARN_COLOR: XColor = [1, 1, 0, 1];
@@ -195,9 +183,6 @@ export const MIN_ZOOM = 1;
 /** 初始化 zoom */
 export const INIT_ZOOM = 1;
 
-/** 探索模式下最小的 zoom */
-export const MIN_EXPLORE_ZOOM = 1;
-
 /** 允许编辑的最小 zoom */
 export const EDIT_ZOOM = 5;
 
@@ -210,10 +195,10 @@ export const ZOOM_SPEED = new Map([
     [5, 0.02],
     [6, 0.01],
     [7, 0.01],
-    [MAX_ZOOM, 0.005],
+    [8, 0.005],
 ]);
 
-/** 层级-距离映射 */
+/** 层级-距离映射，距离地球表面 */
 export const ZOOM_DIS = new Map([
     [1, 2000],
     [2, 500],
@@ -222,7 +207,7 @@ export const ZOOM_DIS = new Map([
     [5, 70],
     [6, 50],
     [7, 30],
-    [MAX_ZOOM, 20],
+    [8, 20],
 ]);
 
 // --------------------------------------------------------
@@ -236,9 +221,6 @@ export const CAMEARA_TO_EARTH_INIT_DIS = ZOOM_DIS.get(INIT_ZOOM);
 
 /** 相机距离地面最近距离 */
 export const CAMEARA_TO_EARTH_MIN_DIS = ZOOM_DIS.get(MAX_ZOOM);
-
-/** fov 75 */
-export const FOV = (Math.PI * 5) / 12;
 
 /** 相机最近切面 */
 export const NEAR = 0.1;
@@ -383,9 +365,16 @@ export const SEA_EDGE_COLOR = 0x0000ff;
 // --------------------------------------------------------
 // --------------------------------------------------------
 // ------------------ 地形 ----------------------------
-/** 地形类型对应纹理图集中的位置，纹理图集采用多行10列排布
- * textureid -> 在纹理图集中的位置
- * 注意，webgl里的uv是从左下角往右上角艹的
+/** 纹理图集行数 */
+export const ATLAS_ROW_COUNT = 5;
+/** 纹理图集列数 */
+export const ATLAS_COLUMN_COUNT = 10;
+/**
+ * textureID -> 在纹理图集中的位置[row, column]
+ *
+ * 地形类型对应纹理图集中的位置, 纹理图集采用多行10列排布
+ *
+ * 注意，webgl里的uv原点在左下角，u+从原点向右，v+从原点向上
  */
 export const TILE_TEXTURE_MAP: Record<number, [number, number]> = {
     // 冰原
@@ -458,9 +447,6 @@ export const TILE_TEXTURE_MAP: Record<number, [number, number]> = {
     // 山脉
     45: [2, 4],
 };
-
-/** 图集 行列 [ rows, cols ] */
-export const TILE_TEXTURE_ATLAS: [number, number] = [5, 10];
 
 // --------------------------------------------------------
 // --------------------------------------------------------
@@ -631,5 +617,5 @@ export enum MOUSE_MODE {
     Elevation = 0,
     WaterElevation = 1,
     Mountain = 2,
-    Vegetation = 3
+    Vegetation = 3,
 }

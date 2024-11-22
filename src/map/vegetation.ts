@@ -1,10 +1,7 @@
-import { BRUSH_HOVER_COLOR, BRUSH_MAX_RADIUS, BRUSH_MIN_RADIUS, MOUSE_MODE } from "./consts";
+import { BRUSH_MAX_RADIUS, BRUSH_MIN_RADIUS, MOUSE_MODE } from "./consts";
 import {
     banControl,
-    createMask,
-    DataTextureConfig,
     getEditType,
-    getGlobalBytesUtils,
     getGlobalMap,
     getIntersectOfMesh,
     getManager,
@@ -14,7 +11,7 @@ import {
     traverseTileBFS,
 } from "./core";
 import { CommonStatus, LayerStyle } from "./types";
-import { BufferGeometry, InstancedMesh, Matrix4, Mesh, MeshBVH, Quaternion, Vector3 } from "./three-manager";
+import { InstancedMesh, Matrix4, Mesh, Quaternion, Vector3 } from "./three-manager";
 
 const status: CommonStatus = {
     isEdit: false,
@@ -22,14 +19,8 @@ const status: CommonStatus = {
     value: 1,
 };
 
-/** mask所在的中心格子，方便标记遮罩层，以及避免重复渲染 */
-let tempMaskTile: number = undefined;
-
-/** 地块遮罩，关联 tempMaskTile */
-let tempMask: Mesh = null;
-
-/** 当前分区内 tileindex -> instance id */
-const tileInstanceMap = new Map<number, number>();
+/** 已经放置的地块 */
+const tiledSet = new Set<number>();
 
 /** 剩余可用的 instanceid */
 const leavedInstanceID = new Set<number>();
@@ -37,7 +28,7 @@ const leavedInstanceID = new Set<number>();
 let treeMesh: InstancedMesh = null;
 
 /** 单个视图下预估能看到的最大数量 */
-const maxCount = 5
+const maxCount = 5;
 
 export function createVegetationInstance() {
     // 假设第一个
@@ -46,14 +37,14 @@ export function createVegetationInstance() {
     const geo = getManager().simplifyMesh(tree.geometry, 0.98);
     treeMesh = new InstancedMesh(geo, tree.material, maxCount);
 
-    const matrix = new Matrix4()
+    const matrix = new Matrix4();
     // 先全部移动到无限远处，代表看不见
-    const pos = new Vector3(100000, 0, 0)
+    const pos = new Vector3(100000, 0, 0);
 
     for (let i = 0; i < maxCount; i++) {
         leavedInstanceID.add(i);
-        matrix.setPosition(pos.clone())
-        treeMesh.setMatrixAt(i, matrix)
+        matrix.setPosition(pos.clone());
+        treeMesh.setMatrixAt(i, matrix);
     }
 
     getManager().scene.add(treeMesh);
@@ -101,10 +92,10 @@ export function vegetationPointerMove(e: PointerEvent) {
 
     if (isEdit) {
         // 更新内存 buffer
-        const { tileZoneMap, zoneMeshMap, zoneMeshTileVertexMap } = getGlobalMap();
+        const { tileZoneMap, zoneMeshMap, tileVertexMap } = getGlobalMap();
 
         for (const index of hoverIndexSet) {
-            if (tileInstanceMap.has(index)) continue;
+            if (tiledSet.has(index)) continue;
 
             const mesh = zoneMeshMap.get(tileZoneMap.get(index));
 
@@ -112,7 +103,7 @@ export function vegetationPointerMove(e: PointerEvent) {
 
             const posAttr = geo.getAttribute("position");
 
-            const verts = zoneMeshTileVertexMap.get(index);
+            const verts = tileVertexMap.get(index);
             const last = verts[verts.length - 1];
 
             const x = posAttr.getX(last);
@@ -121,24 +112,27 @@ export function vegetationPointerMove(e: PointerEvent) {
 
             // 加树子
             const pos = new Vector3(x, y, z);
-            const quaternion = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), pos.clone().normalize());
+            const quaternion = new Quaternion().setFromUnitVectors(
+                new Vector3(0, 1, 0),
+                pos.clone().normalize()
+            );
 
             const matrix = new Matrix4();
             matrix.compose(pos, quaternion, new Vector3(3, 3, 3));
 
             const id = [...leavedInstanceID][0];
-            console.log("id", id)
+            console.log("id", id);
             treeMesh.setMatrixAt(id, matrix);
             // 用了这个id
             leavedInstanceID.delete(id);
-            tileInstanceMap.set(index, id);
+            tiledSet.add(index);
         }
 
         // 需要更新 shader的 instanceMatrix
-        treeMesh.instanceMatrix.needsUpdate = true
+        treeMesh.instanceMatrix.needsUpdate = true;
         // 更改位置后必须更新，视锥检查是整个instanceMesh
         // 不是单个实例，不更新会导致视锥裁剪错误
-        treeMesh.computeBoundingSphere()
+        treeMesh.computeBoundingSphere();
     }
 }
 
@@ -168,52 +162,4 @@ export function setStatus<T extends keyof CommonStatus>(k: T, v: CommonStatus[T]
         status[k] = v;
     }
     // updateStatus();
-}
-
-/** 销毁格子遮罩 */
-function destroyTileMask() {
-    if (!tempMask) return;
-
-    tempMask.removeFromParent();
-    tempMask.geometry.dispose();
-    // @ts-ignore
-    tempMask.material.dispose();
-
-    tempMask = null;
-    tempMaskTile = undefined;
-}
-
-/**
- * 创建格子遮罩
- * @param tileIndices 创建遮罩的格子
- * @param tileIndex 遮罩中心，用于避免重复计算，通常取鼠标所在的位置
- * @param style 遮罩样式
- * @param detail 细粒度控制样式
- * @param force 强制更新
- */
-function createTileMask(
-    tileIndices: Set<number>,
-    tileIndex: number,
-    style: LayerStyle,
-    detail?: Record<number, LayerStyle>,
-    force?: boolean
-) {
-    // 检查一下，避免在同一个格子重复生成遮罩
-    if (tileIndex === tempMaskTile && !force) return;
-
-    // 销毁旧的遮罩
-    destroyTileMask();
-
-    const { color } = style;
-
-    const { mask } = createMask(tileIndices, { color }, detail);
-    if (!mask) return;
-
-    tempMask = mask;
-
-    tempMaskTile = tileIndex;
-
-    const manager = getManager();
-
-    manager.scene.add(tempMask);
 }

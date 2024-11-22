@@ -110,7 +110,7 @@ import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
 import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { MeshBVH, acceleratedRaycast } from "three-mesh-bvh";
 import { Coordinate, Coordinate2D, LatLng } from "./types";
-import TWEEN, { Tween } from "@tweenjs/tween.js";
+import { Tween, Group as TweenGroup } from "@tweenjs/tween.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
@@ -135,7 +135,7 @@ class ThreeManager {
     private _scene: Scene;
 
     /** 只保留一个主视角相机 */
-    private _camera: Camera;
+    private _camera: PerspectiveCamera;
     private clock: Clock;
     private cameraOrbitControls: Map<number, SphereOrbitControls> = new Map();
 
@@ -158,13 +158,15 @@ class ThreeManager {
      * 一直从这个起点开始动画，导致跳动，所以每次
      * 都需要从新创建tween
      */
-    private cameraTween: Tween<Vector3>;
+    private linearTween: Tween<{ t: number }>;
+    private sphereTween: Tween<{ t: number }>;
+
+    private tweenGroup = new TweenGroup();
 
     private simplifyModifier: SimplifyModifier;
 
     constructor(parameters?: WebGLRendererParameters) {
         this.renderer = new WebGLRenderer(parameters);
-        // this.renderer.useLegacyLights = true;
     }
 
     /** 设置或得到场景 */
@@ -178,8 +180,7 @@ class ThreeManager {
         return this._scene;
     }
 
-    /** 设置或得到主视角相机，相机可能会有很多个，这里只包括主视角相机 */
-    set camera(camera: Camera) {
+    set camera(camera: PerspectiveCamera) {
         if (this._camera == undefined) {
             this._camera = camera;
         }
@@ -189,83 +190,68 @@ class ThreeManager {
         return this._camera;
     }
 
-    /**
-     * 创建相机的位置动画
-     * 这个动画很干脆，直接走直线，很多时候达不到效果
-     * 比如想沿着曲线走
-     * @param duration 持续视角
-     * @param autoStart 动画自动执行，默认true
-     */
-    createCameraTween(start: Vector3, end: Vector3, duration = 300, autoStart = true) {
-        // tween必须重新创建
-        this.cameraTween = new Tween(start);
-        this.cameraTween.to(end, duration);
+    getTweenGroup() {
+        return this.tweenGroup;
+    }
 
-        if (autoStart) {
-            this.cameraTween.start();
-        }
-
-        return this.cameraTween;
+    getRenderer() {
+        return this.renderer;
     }
 
     /**
-     * 创建基于球面相机的补间动画，相机不会再直线穿过从 A 到 B
-     * 而是绕着球面走最短路线 从 A 到 B
-     * @param duration 持续视角 default 300
-     * @param autoStart 动画自动执行，默认true
+     * 循环动画， 传入 null 停止动画，如果不需要动画，比如只是一些
+     * 静态的画面直接调用 `this.getRenderer().render()` 获得更好的性能
      */
-    createCameraSphereTween(start: Vector3, end: Vector3, duration = 300, autoStart = true) {
-        // tween必须重新创建
-        // 用角度代替相机位置，实现球面运动，牛逼
-        // 这里必须克隆一下，动画过程中会不断更改相机位置，更改start，导致计算粗错
-        const _s = start.clone();
-        const angle = { value: 0 };
-        const tween = new Tween(angle);
-        const angleEnd = start.angleTo(end);
-        const n = start.clone().cross(end).normalize();
-        tween.to({ value: angleEnd }, duration).onUpdate(({ value }) => {
-            // 直接修改相机位置
-            // 必须用克隆版本，否则 夹角不对
-            this.camera.position.copy(_s).applyAxisAngle(n, value);
+    loop(callback?: (time: number) => void) {
+        this.getRenderer().setAnimationLoop(callback);
+    }
+
+    getClock() {
+        if (this.clock == undefined) {
+            this.clock = new Clock();
+        }
+        return this.clock;
+    }
+
+    /** 直线相机动画 */
+    createLineTween(to: Vector3, duration = 300, autoStart = true) {
+        this.tweenGroup.removeAll();
+        const v = this.camera.position;
+        const obj = { t: 0 };
+        const tween = new Tween(obj).to({ t: 1 }, duration).onUpdate(() => {
+            this.camera.position.copy(v.clone().lerp(to, obj.t));
         });
 
         if (autoStart) {
             tween.start();
         }
 
+        this.tweenGroup.add(tween);
+
         return tween;
     }
 
-    /**
-     * 创建基于四元数球面相机的补间动画，相机不会再直线穿过从 A 到 B
-     * 而是绕着球面走最短路线 从 A 到 B
-     * @param duration 持续视角
-     * @param autoStart 动画自动执行，默认true
-     */
-    createCameraSphereQuaternionTween(
-        _start: Vector3,
-        end: Vector3,
-        duration = 300,
-        autoStart = true
-    ) {
-        // tween必须重新创建
-        const q1 = this.camera.quaternion;
-        const q2 = new Quaternion().setFromUnitVectors(
-            new Vector3(0, 0, 1),
-            end.clone().normalize()
-        );
-        const tween = new Tween(q1);
-        tween.to(q2, duration);
+    /** 球面相机动画，只能用于target在原地的动画 */
+    createSphereTween(to: Vector3, duration = 300, autoStart = true) {
+        this.tweenGroup.removeAll();
+        const obj = { t: 0 };
+        const start = this.camera.position.clone().normalize();
+        const end = to.clone().normalize();
+
+        const quat = new Quaternion();
+        const quat1 = new Quaternion().setFromUnitVectors(start, end);
+
+        const tween = new Tween(obj).to({ t: 1 }, duration).onUpdate(() => {
+            this.camera.applyQuaternion(quat.clone().slerp(quat1, obj.t));
+        });
 
         if (autoStart) {
             tween.start();
         }
 
-        return tween;
-    }
+        this.tweenGroup.add(tween);
 
-    getRenderer() {
-        return this.renderer;
+        return tween;
     }
 
     /**
@@ -289,21 +275,6 @@ class ThreeManager {
             }
         }
         return needResize;
-    }
-
-    /**
-     * 循环动画， 传入 null 停止动画，如果不需要动画，比如只是一些
-     * 静态的画面直接调用 `this.getRenderer().render()` 获得更好的性能
-     */
-    loop(callback?: (time: number) => void) {
-        this.getRenderer().setAnimationLoop(callback);
-    }
-
-    getClock() {
-        if (this.clock == undefined) {
-            this.clock = new Clock();
-        }
-        return this.clock;
     }
 
     /** 获取该相机绑定的 orbitControls，如果没有则创建 */
@@ -342,7 +313,7 @@ class ThreeManager {
         return control;
     }
 
-    GetGLTFLoader(manager?: LoadingManager) {
+    getGLTFLoader(manager?: LoadingManager) {
         if (this.glTFLoader == undefined) {
             this.glTFLoader = new GLTFLoader(manager);
         } else {
@@ -351,7 +322,7 @@ class ThreeManager {
         return this.glTFLoader;
     }
 
-    GetFBXLoader(manager?: LoadingManager) {
+    getFBXLoader(manager?: LoadingManager) {
         if (this.fbxLoader == undefined) {
             this.fbxLoader = new FBXLoader(manager);
         } else {
@@ -418,17 +389,6 @@ class ThreeManager {
         this.getRenderer().setViewport(left, positiveYUpBottom, width, height);
 
         return width / height;
-    }
-
-    /** 平行光 helper，帮助观察 */
-    directionalLightHelper(light: DirectionalLight, node: Object3D) {
-        let helper = node.getObjectByName(`lighthelper${light.uuid}`) as DirectionalLightHelper;
-        if (helper == undefined) {
-            helper = new DirectionalLightHelper(light);
-            helper.name = `lighthelper${light.uuid}`;
-            node.add(helper);
-        }
-        return helper;
     }
 
     /** 鼠标拾取目标 */
@@ -705,6 +665,17 @@ class ThreeManager {
 
         mesh.instanceMatrix.needsUpdate = true;
     }
+
+    /** 获取相机视锥体 */
+    getCameraFrustum() {
+        const camera = this.camera;
+        const frustum = new Frustum();
+        frustum.setFromProjectionMatrix(
+            new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+        );
+
+        return frustum;
+    }
 }
 
 export default ThreeManager;
@@ -746,7 +717,6 @@ export {
     MeshBVH,
     LineSegments,
     WebGLCubeRenderTarget,
-    TWEEN,
     ArrowHelper,
     Line2,
     LineGeometry,
@@ -807,4 +777,5 @@ export {
     Frustum,
     Sphere,
     SimplifyModifier,
+    Tween,
 };

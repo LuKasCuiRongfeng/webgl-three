@@ -1,4 +1,4 @@
-import { LineSegments } from "./three-manager";
+import { LineSegments, Vector2, Vector3 } from "./three-manager";
 
 /** uv 坐标 */
 export type UV = [number, number];
@@ -59,8 +59,8 @@ export type GISZone = [number, number];
  */
 export type GISZoneKey = string;
 
-/** 同时适用多个分区组合的大分区，注意把极地分区合并成一个小分区 */
-export type GISZoneMap = Record<GISZoneKey, GISZone>;
+/** { zonekey -> zone } */
+export type GISZoneMap = Record<string, GISZone>;
 
 /** 代表当前可显示的分区，可能有一个或多个 */
 export type GISZones = Map<GISZoneKey, GISZone>;
@@ -112,4 +112,11 @@ export type GeoBounds = {
 export type ZoneData = {
     zone: GISZone,
     bounds: GeoBounds
+}
+
+export type MouseIntersect = {
+    tileIndex?: number;
+    point?: Vector3;
+    latlng?: LatLng;
+    uv?: Vector2
 }
