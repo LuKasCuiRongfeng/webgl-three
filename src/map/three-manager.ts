@@ -237,11 +237,13 @@ class ThreeManager {
         const obj = { t: 0 };
         const start = this.camera.position.clone().normalize();
         const end = to.clone().normalize();
+        const oldQuat = this.camera.quaternion.clone()
 
         const quat = new Quaternion();
         const quat1 = new Quaternion().setFromUnitVectors(start, end);
 
         const tween = new Tween(obj).to({ t: 1 }, duration).onUpdate(() => {
+            this.camera.quaternion.copy(oldQuat)
             this.camera.applyQuaternion(quat.clone().slerp(quat1, obj.t));
         });
 

@@ -4,8 +4,7 @@ import {
     getEditType,
     getGlobalBytesUtils,
     getGlobalMap,
-    getIntersectOfMesh,
-    getManager,
+    getMouseIntersect,
     getUniforms,
     resetControl,
     traverseTileBFS,
@@ -30,8 +29,7 @@ export function elevationPointerDown(e: PointerEvent) {
     // 只考虑左键触发
     if (e.button !== 0) return;
 
-    const manager = getManager();
-    const { tileIndex } = getIntersectOfMesh(manager.getCanvasNDC(e)) || {};
+    const { tileIndex } = getMouseIntersect();
     if (tileIndex == null) return;
 
     setStatus("isEdit", true);
@@ -41,8 +39,7 @@ export function elevationPointerDown(e: PointerEvent) {
 export function elevationPointerMove(e: PointerEvent) {
     if (!isTheType()) return;
     const { isEdit, radius, value } = status;
-    const manager = getManager();
-    const { tileIndex } = getIntersectOfMesh(manager.getCanvasNDC(e)) || {};
+    const { tileIndex } = getMouseIntersect();
     if (tileIndex == null) return;
 
     const { uTileCount, uTileHoverArray } = getUniforms();

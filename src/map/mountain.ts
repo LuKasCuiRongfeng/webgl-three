@@ -3,13 +3,13 @@ import {
     banControl,
     getEditType,
     getGlobalMap,
-    getIntersectOfMesh,
     getManager,
+    getMouseIntersect,
     getUniforms,
     resetControl,
 } from "./core";
-import { CommonStatus, LayerStyle } from "./types";
-import { BufferGeometry, Mesh, MeshBVH } from "./three-manager";
+import { CommonStatus } from "./types";
+import { BufferGeometry, MeshBVH } from "./three-manager";
 
 const status: CommonStatus = {
     isEdit: false,
@@ -30,7 +30,7 @@ export function mountainPointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
 
     const manager = getManager();
-    const { tileIndex } = getIntersectOfMesh(manager.getCanvasNDC(e)) || {};
+    const { tileIndex } = getMouseIntersect();
     if (tileIndex == null) return;
 
     setStatus("isEdit", true);
@@ -40,8 +40,7 @@ export function mountainPointerDown(e: PointerEvent) {
 export function mountainPointerMove(e: PointerEvent) {
     if (!isTheType()) return;
     const { isEdit } = status;
-    const manager = getManager();
-    const { tileIndex } = getIntersectOfMesh(manager.getCanvasNDC(e)) || {};
+    const { tileIndex } = getMouseIntersect();
     if (tileIndex == null) return;
 
     const { uTileCount, uTileHoverArray } = getUniforms();

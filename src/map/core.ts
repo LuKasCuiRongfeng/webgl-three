@@ -177,7 +177,7 @@ const tileUVMap: Map<number, number[]> = new Map();
 let gisZones: GISZoneMap = {};
 
 /** 是否位于低轨道 */
-let isLowHeight = false;
+let isLowOrbit = false;
 
 /** 光源轨道 */
 let sunOrbit: Spherical = null;
@@ -303,6 +303,13 @@ export async function initMap() {
     await drawAllZoneMesh();
 
     mapInitStatus.loadPercent = 100;
+
+    setInterval(() => {
+        const index = Math.floor(Math.random() * 10000)
+        const { x, y, z } = meshBytesUtils.getTileByIndex(index)
+        const length = manager.camera.position.length()
+        cameraToSpherePos(new Vector3(x, y, -z).normalize().multiplyScalar(length))
+    }, 2000);
 }
 
 function render() {
@@ -373,6 +380,36 @@ function createCamerea() {
     onControlsEvent();
 }
 
+/** 相机球面动画 */
+export function cameraToSpherePos(to: Vector3) {
+    return new Promise((resolve) => {
+        if (isLowOrbit) {
+            const controls = getOrbitControls();
+            const target = controls.target;
+
+            const obj = { t: 0 };
+            const start = target.clone().normalize();
+            const end = to.clone().normalize();
+
+            const quat = new Quaternion();
+            const quat1 = new Quaternion().setFromUnitVectors(start, end);
+
+            const tween = new Tween(obj)
+                .to({ t: 1 }, 300)
+                .onUpdate(() => {
+                    target.applyQuaternion(quat.clone().slerp(quat1, obj.t));
+                    // 同时不断更新camera的位置
+                })
+                .start()
+                .onComplete(() => resolve(0));
+
+            manager.getTweenGroup().add(tween);
+        } else {
+            manager.createSphereTween(to).onComplete(() => resolve(0));
+        }
+    });
+}
+
 /** 注册控件事件 */
 function onControlsEvent() {
     const controls = getOrbitControls();
@@ -394,6 +431,7 @@ function onControlsChanged() {
 function onControlsWheel() {
     updateCameraFar();
     setCameraPose();
+    updateWheelZoom();
 }
 
 export function banControl() {
@@ -440,7 +478,7 @@ function setCameraPose() {
 
     // 进入编辑距离
     if (dis <= maxEditDis) {
-        if (isLowHeight) {
+        if (isLowOrbit) {
             // 此时 target已经改变，放到球面上，重新计算距离target距离
             dis = pos.clone().sub(controls.target).length();
         }
@@ -450,7 +488,7 @@ function setCameraPose() {
             controls._tiltMaxAngle *
             (1 - (dis - CAMEARA_TO_EARTH_MIN_DIS) / (maxEditDis - CAMEARA_TO_EARTH_MIN_DIS));
 
-        if (!isLowHeight) {
+        if (!isLowOrbit) {
             controls.minDistance = CAMEARA_TO_EARTH_MIN_DIS;
             controls.target.copy(pos.clone().normalize().multiplyScalar(earthRadius));
             controls.setIsTiltZoom(true);
@@ -461,7 +499,7 @@ function setCameraPose() {
                 RIGHT: MOUSE.PAN,
             };
 
-            isLowHeight = true;
+            isLowOrbit = true;
             uniforms.uPureColor.value = false;
 
             // 重要，更新前更新倾角
@@ -470,7 +508,7 @@ function setCameraPose() {
         }
 
         controls.setCameraOrthTiltAngle(angle);
-    } else if (isLowHeight) {
+    } else if (isLowOrbit) {
         // 重置target到原点
         controls.target.copy(new Vector3(0, 0, 0));
         controls.setIsTiltZoom(false);
@@ -481,11 +519,69 @@ function setCameraPose() {
             RIGHT: MOUSE.ROTATE,
         };
 
-        isLowHeight = false;
+        isLowOrbit = false;
         uniforms.uPureColor.value = true;
 
         controls.update();
     }
+}
+
+function setChangedControls() {}
+
+function setChangingControls() {}
+
+/** 根据距离更新 zoom */
+function updateWheelZoom() {
+    const pos = manager.camera.position;
+    const dis = pos.length() - earthRadius;
+    const controls = getOrbitControls();
+
+    let zoom = MAX_ZOOM;
+
+    while (zoom > 0) {
+        if (dis <= ZOOM_DIS.get(zoom)) {
+            mapZoom = zoom;
+            break;
+        }
+        zoom--;
+    }
+
+    // 控制缩放的速度和旋转的速度
+    const speed = ZOOM_SPEED.get(mapZoom);
+
+    if (!isLowOrbit) {
+        controls.rotateSpeed = speed;
+        controls.zoomSpeed = speed * 3.6;
+    } else if (isLowOrbit) {
+        controls.rotateSpeed = 1;
+        controls.zoomSpeed = 2;
+        controls.panSpeed = 0.006;
+    }
+}
+
+/** 设置缩放 */
+export function setZoom(zoom: number) {
+    if (zoom > MAX_ZOOM) {
+        zoom = MAX_ZOOM;
+    }
+    if (zoom < MIN_ZOOM) {
+        zoom = MIN_ZOOM;
+    }
+
+    if (zoom === mapZoom) return;
+
+    mapZoom = zoom;
+
+    const length = ZOOM_DIS.get(mapZoom) + earthRadius;
+    const position = manager.camera.position;
+
+    const des = manager.getCollinearVector(position, length);
+
+    // mapZoom 不涉及球体旋转，不使用球面插值动画
+    manager.createLineTween(des).onComplete(() => {
+        // 更新一下zoom
+        updateWheelZoom();
+    });
 }
 
 function createLight() {
@@ -645,6 +741,23 @@ export function getIntersectOfMesh(ndc: Coordinate2D) {
     };
 }
 
+/**
+ * 是否是在点击画布，由于点击事件同时会触发 control的事件，
+ * 在这里做一个区分，如果用户点击的时间很短，并且鼠标移动
+ * 了很短的距离，认为用户只是在点击，而不是在拖拽地图
+ */
+export function isShortClick() {
+    if (
+        clickEndTime - clickStartTime < MAX_CLICKING_TIME &&
+        (clickEndPos.x - clickStartPos.x) ** 2 + (clickEndPos.y - clickStartPos.y) ** 2 <
+            MAX_MOVE_DELTA_SQA
+    ) {
+        return true;
+    }
+
+    return false;
+}
+
 /** 获取轨道控件 */
 function getOrbitControls() {
     return manager.getOrbitControls(manager.camera, manager.getRenderer().domElement);
@@ -789,6 +902,16 @@ function createDataTexture() {
     uniforms.uDataTexture.value = texture;
 }
 
+export async function loadTestTree() {
+    const loader = manager.getGLTFLoader();
+    const gltf = await loader.loadAsync("http://localhost:12345/fuck/quiver_tree_02_1k.gltf");
+    testTree = gltf.scene;
+}
+
+export function getTestTree() {
+    return testTree;
+}
+
 /**
  * ##为了快速定位，采取地理坐标分区，初始化地图时先调用
  *
@@ -849,7 +972,145 @@ function initQuadTreeNode() {
     }
 }
 
-function getVisibleZone(frustum: Frustum) {
+/** 获取分区的包围盒 */
+export function getZoneBox(zone: GISZone): GeoBounds {
+    let [lat, lng] = zone;
+
+    let latMax = 0,
+        latMin = 0,
+        lonMax = 0,
+        lonMin = 0;
+
+    if (lat > LAT_SLICES / 2) {
+        lat = lat - LAT_SLICES / 2;
+        latMax = LAT_DIVIDER[lat];
+        latMin = LAT_DIVIDER[lat - 1];
+    } else {
+        lat = LAT_SLICES / 2 - lat;
+        latMax = -LAT_DIVIDER[lat];
+        latMin = -LAT_DIVIDER[lat + 1];
+    }
+
+    if (lng <= LNG_SLICES / 2) {
+        lonMax = LNG_DIVIDER * lng;
+        lonMin = LNG_DIVIDER * (lng - 1);
+    } else {
+        lng = LNG_SLICES - lng;
+        lonMin = -(lng + 1) * LNG_DIVIDER;
+        lonMax = -lng * LNG_DIVIDER;
+    }
+
+    return {
+        lonMin,
+        lonMax,
+        latMax,
+        latMin,
+        center: { lat: (latMax + latMin) / 2, lng: (lonMin + lonMax) / 2 },
+    };
+}
+
+/** 返回点所在的分区 */
+export function getZoneByPoint(v: Vector3): GISZone {
+    const { lat, lng } = manager.vector3ToLatLng(v);
+    let lngZone = Math.floor(lng / LNG_DIVIDER);
+
+    if (lng >= 0) {
+        lngZone += 1;
+    } else {
+        lngZone += LNG_SLICES + 1;
+    }
+
+    let latZone = 0;
+
+    for (let i = 1; i < LAT_DIVIDER.length; i++) {
+        if (Math.abs(lat) <= LAT_DIVIDER[i]) {
+            latZone = i;
+            break;
+        }
+    }
+    if (lat < 0) {
+        latZone = LAT_SLICES / 2 - latZone + 1;
+    } else {
+        latZone += LAT_SLICES / 2;
+    }
+
+    // 检查
+    if (latZone === 0) return;
+
+    return [latZone, lngZone];
+}
+
+function setZones() {}
+
+function afterVisibleZoneChange() {}
+
+function beforeVisibleZoneChange() {}
+
+/** 获取该分区的相邻分区， 不包括自己 */
+export function getAdjacentZones(zone: GISZone) {
+    const [lat] = zone;
+
+    const min = Math.max(1, lat - 1);
+    const max = Math.min(LAT_SLICES, lat + 1);
+
+    const zs: GISZoneMap = {};
+
+    for (let i = min; i <= max; i++) {
+        for (let j = 1; j <= LNG_SLICES; j++) {
+            const z: GISZone = [i, j];
+            const key = getZoneKey(z);
+
+            if (isAdjacentZones(zone, z) && !zs[key]) {
+                zs[key] = z;
+            }
+        }
+    }
+
+    return zs;
+}
+
+/** 判断是否是相邻分区 */
+export function isAdjacentZones(zone1: GISZone, zone2: GISZone) {
+    if (!zone1 || !zone2) return false;
+
+    if (getZoneKey(zone1) === getZoneKey(zone2)) return false;
+
+    const [zLat1, zLng1] = zone1;
+    const [zLat2, zLng2] = zone2;
+
+    if (
+        Math.abs(zLat1 - zLat2) <= 1 &&
+        (Math.abs(zLng1 - zLng2) <= 1 || Math.abs(zLng1 - zLng2) === LNG_SLICES - 1)
+    ) {
+        return true;
+    }
+
+    return false;
+}
+
+/** 检查是否是可见区域 */
+export function isVisibleZone(zone: GISZone, frustum: Frustum) {
+    const { lonMin, lonMax, latMax, latMin, center } = getZoneBox(zone);
+    // 左上
+    const lt = manager.latLngToVector3(latMax, lonMin, earthRadius);
+    // 左下
+    const lb = manager.latLngToVector3(latMin, lonMin, earthRadius);
+    // 右上
+    const rt = manager.latLngToVector3(latMax, lonMax, earthRadius);
+    // 右下
+    const rb = manager.latLngToVector3(latMin, lonMax, earthRadius);
+
+    // 加中心更准确
+    const c = manager.latLngToVector3(center.lat, center.lng, earthRadius);
+
+    const box = new Box3();
+    const corners = [lt, lb, rt, rb, c];
+    corners.forEach((v) => box.expandByPoint(v));
+
+    return frustum.intersectsBox(box);
+}
+
+export function getVisibleZone(frustum: Frustum) {
     if (!quadTree) return;
 
     // return quadTree.query(frustum)
@@ -871,52 +1132,18 @@ function getVisibleZone(frustum: Frustum) {
     return result;
 }
 
-/** 预处理地块，将地块分配给对应的分区 */
-async function preprocessTiles() {
-    const { tilesCount } = meshBytesUtils.getHeader();
-    // 预分区，包括网格和地图数据
-    for (let i = 0; i < tilesCount; i++) {
-        const { x, y, z } = meshBytesUtils.getTileByIndex(i);
-        const zone = getZoneByPoint(new Vector3(x, y, -z));
-        if (!zone) continue;
-
-        // 预先分配好每个地块对应的分区
-        tileZoneMap.set(i, getZoneKey(zone));
-
-        const key = getZoneKey(zone);
-        const tiles = zoneTileMap.get(key);
-
-        if (!tiles) {
-            zoneTileMap.set(key, [i]);
-        } else {
-            tiles.push(i);
-        }
-
-        // 预先分配好每个地块对应的顶点uv
-        const uvs = getTileUV(i);
-        tileUVMap.set(i, uvs);
-
-        // 通过睡眠 ease cpu 的计算
-        if (i % 100000 === 0) {
-            const per = Math.round((i / tilesCount) * 100);
-            mapInitStatus.loadPercent = 0.5 * per;
-            await sleep(0);
-        }
-    }
-}
-
 /** 计算地块的正向，以观察者视角为准，返回单位向量 */
-export function getTileN(v: Vector3, radius: number) {
-    const { y } = v;
+export function getTileN(center: Vector3) {
+    const { y } = center;
     const n = new Vector3(0, 1, 0);
 
     // 赤道
     if (y === 0) return n;
 
-    const angle = n.angleTo(v);
-    const length = radius / Math.cos(angle);
+    const angle = n.angleTo(center);
+    const length = earthRadius / Math.cos(angle);
 
-    n.multiplyScalar(length).sub(v).normalize();
+    n.multiplyScalar(length).sub(center).normalize();
 
     // 注意方向，南半球反向
     if (y < 0) {
@@ -926,18 +1153,9 @@ export function getTileN(v: Vector3, radius: number) {
     return n;
 }
 
-/** 获取该类型所处的uv范围 */
-function getTextureUVSpan(textureId: number) {
-    if (textureId == null) return;
-
-    const du = 1 / ATLAS_COLUMN_COUNT;
-    const dv = 1 / ATLAS_ROW_COUNT;
-
-    const [col, row] = TILE_TEXTURE_MAP[textureId] || DEFAULT_TERRIAN;
-    const u = du * col;
-    const v = dv * row;
-
-    return { u, v, du, dv };
+/** 坐标是否可见 */
+export function isVisibleVector(v: Vector3, frustum: Frustum) {
+    return frustum.containsPoint(v);
 }
 
 /**
@@ -982,15 +1200,15 @@ function getTileUV(tileIndex: number) {
     const { x, y, z, corners } = meshBytesUtils.getTileByIndex(tileIndex);
 
     const center = new Vector3(x, y, -z);
-    const n = getTileN(center, earthRadius);
+    const n = getTileN(center);
 
     let tId = type;
     if (elevation <= waterElevation) {
         tId = 40;
     }
 
-    const uvSpan = getTextureUVSpan(tId);
-    const { u, v, du, dv } = uvSpan;
+    const [u, v] = atlasMap.get(tId);
+    const { du, dv } = atlasDuDv;
 
     // 地块中心近似uv
     const cu = u + du / 2;
@@ -998,8 +1216,8 @@ function getTileUV(tileIndex: number) {
 
     const uvs: number[] = [];
 
-    corners.forEach((v) => {
-        const { x, y, z } = meshBytesUtils.getCornerByIndex(v);
+    corners.forEach((i) => {
+        const { x, y, z } = meshBytesUtils.getCornerByIndex(i);
         const uv = getTileVertexUV([u, v], new Vector3(x, y, -z), center, n);
         uvs.push(...uv);
     });
@@ -1018,6 +1236,106 @@ function getTileUV(tileIndex: number) {
     uvs.push(...lerpUV);
 
     return uvs;
+}
+
+/** 预处理地块，将地块分配给对应的分区 */
+async function preprocessTiles() {
+    const { tilesCount } = meshBytesUtils.getHeader();
+    // 预分区，包括网格和地图数据
+    for (let i = 0; i < tilesCount; i++) {
+        const { x, y, z } = meshBytesUtils.getTileByIndex(i);
+        const zone = getZoneByPoint(new Vector3(x, y, -z));
+        if (!zone) continue;
+
+        // 预先分配好每个地块对应的分区
+        tileZoneMap.set(i, getZoneKey(zone));
+
+        const key = getZoneKey(zone);
+        const tiles = zoneTileMap.get(key);
+
+        if (!tiles) {
+            zoneTileMap.set(key, [i]);
+        } else {
+            tiles.push(i);
+        }
+
+        // 预先分配好每个地块对应的顶点uv
+        const uvs = getTileUV(i);
+        tileUVMap.set(i, uvs);
+
+        // 通过睡眠 ease cpu 的计算
+        if (i % 100000 === 0) {
+            const per = Math.round((i / tilesCount) * 100);
+            mapInitStatus.loadPercent = 10 + 0.5 * per;
+            await sleep(0);
+        }
+    }
+}
+
+/** 细分更多的结构 */
+export function createTileGeometry(op: {
+    vertices: Coordinate[];
+    center: Coordinate;
+    tileIndex: number;
+    color?: XColor;
+    elevation?: number;
+    waterElevation?: number;
+    type?: number;
+}) {
+    const { vertices, center, elevation, waterElevation, tileIndex } = op;
+    const geometry = new BufferGeometry();
+
+    const points: number[] = [];
+    const uvs = tileUVMap.get(tileIndex);
+
+    const aEle: number[] = [];
+    const aWaterEle: number[] = [];
+    const aTileId: number[] = [];
+
+    const count = vertices.length;
+
+    // 增加顶点数量，增加细分，直接取顶点到中心的中点
+    for (let i = 0; i < count; i++) {
+        const { x, y, z } = vertices[i];
+        // 内圈和原顶点坐标一样
+        vertices.push({ x, y, z });
+    }
+
+    // 加上中心
+    vertices.push(center);
+
+    vertices.forEach((v) => {
+        const { x, y, z } = v;
+        points.push(x, y, z);
+        aEle.push(elevation);
+        aWaterEle.push(waterElevation);
+        aTileId.push(tileIndex);
+    });
+
+    geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
+    geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
+    geometry.setAttribute("aTileId", new Float32BufferAttribute(aTileId, 1));
+    geometry.setAttribute("aEle", new BufferAttribute(new Float32Array(aEle), 1));
+    geometry.setAttribute("aWaterEle", new BufferAttribute(new Float32Array(aWaterEle), 1));
+
+    if (count === 6) {
+        // 正六边形再次细分为18个三角面
+        geometry.setIndex([
+            0, 1, 7, 0, 7, 6, 1, 2, 8, 1, 8, 7, 2, 3, 9, 2, 9, 8, 3, 4, 10, 3, 10, 9, 4, 11, 10, 4,
+            5, 11, 5, 6, 11, 5, 0, 6, 6, 7, 12, 7, 8, 12, 8, 9, 12, 9, 10, 12, 10, 11, 12, 11, 6,
+            12,
+        ]);
+    } else {
+        // 正五边形细分为15个三角面
+        geometry.setIndex([
+            0, 1, 6, 0, 6, 5, 1, 2, 7, 1, 7, 6, 2, 3, 8, 2, 8, 7, 3, 4, 9, 3, 9, 8, 4, 5, 9, 4, 0,
+            5, 5, 6, 10, 6, 7, 10, 7, 8, 10, 8, 9, 10, 9, 5, 10,
+        ]);
+    }
+    // 重要，计算法线，用于着色器地形生成
+    geometry.computeVertexNormals();
+
+    return geometry;
 }
 
 /**
@@ -1138,328 +1456,4 @@ async function drawAllZoneMesh() {
 
         count++;
     }
-}
-
-/** 细分更多的结构 */
-export function createTileGeometry(op: {
-    vertices: Coordinate[];
-    center: Coordinate;
-    tileIndex: number;
-    color?: XColor;
-    elevation?: number;
-    waterElevation?: number;
-    type?: number;
-}) {
-    const { vertices, center, elevation, waterElevation, tileIndex } = op;
-    const geometry = new BufferGeometry();
-
-    const points: number[] = [];
-    const uvs = tileUVMap.get(tileIndex);
-
-    const aEle: number[] = [];
-    const aWaterEle: number[] = [];
-    const aTileId: number[] = [];
-
-    const count = vertices.length;
-
-    // 增加顶点数量，增加细分，直接取顶点到中心的中点
-    for (let i = 0; i < count; i++) {
-        const { x, y, z } = vertices[i];
-        // 内圈和原顶点坐标一样
-        vertices.push({ x, y, z });
-    }
-
-    // 加上中心
-    vertices.push(center);
-
-    vertices.forEach((v) => {
-        const { x, y, z } = v;
-        points.push(x, y, z);
-        aEle.push(elevation);
-        aWaterEle.push(waterElevation);
-        aTileId.push(tileIndex);
-    });
-
-    geometry.setAttribute("position", new BufferAttribute(new Float32Array(points), 3));
-    geometry.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
-    geometry.setAttribute("aTileId", new Float32BufferAttribute(aTileId, 1));
-    geometry.setAttribute("aEle", new BufferAttribute(new Float32Array(aEle), 1));
-    geometry.setAttribute("aWaterEle", new BufferAttribute(new Float32Array(aWaterEle), 1));
-
-    if (count === 6) {
-        // 正六边形再次细分为18个三角面
-        geometry.setIndex([
-            0, 1, 7, 0, 7, 6, 1, 2, 8, 1, 8, 7, 2, 3, 9, 2, 9, 8, 3, 4, 10, 3, 10, 9, 4, 11, 10, 4,
-            5, 11, 5, 6, 11, 5, 0, 6, 6, 7, 12, 7, 8, 12, 8, 9, 12, 9, 10, 12, 10, 11, 12, 11, 6,
-            12,
-        ]);
-    } else {
-        // 正五边形细分为15个三角面
-        geometry.setIndex([
-            0, 1, 6, 0, 6, 5, 1, 2, 7, 1, 7, 6, 2, 3, 8, 2, 8, 7, 3, 4, 9, 3, 9, 8, 4, 5, 9, 4, 0,
-            5, 5, 6, 10, 6, 7, 10, 7, 8, 10, 8, 9, 10, 9, 5, 10,
-        ]);
-    }
-    // 重要，计算法线，用于着色器地形生成
-    geometry.computeVertexNormals();
-
-    return geometry;
-}
-
-/** 返回点所在的分区 */
-export function getZoneByPoint(v: Vector3): GISZone {
-    const { lat, lng } = manager.vector3ToLatLng(v);
-    let lngZone = Math.floor(lng / LNG_DIVIDER);
-
-    if (lng >= 0) {
-        lngZone += 1;
-    } else {
-        lngZone += LNG_SLICES + 1;
-    }
-
-    let latZone = 0;
-
-    for (let i = 1; i < LAT_DIVIDER.length; i++) {
-        if (Math.abs(lat) <= LAT_DIVIDER[i]) {
-            latZone = i;
-            break;
-        }
-    }
-    if (lat < 0) {
-        latZone = LAT_SLICES / 2 - latZone + 1;
-    } else {
-        latZone += LAT_SLICES / 2;
-    }
-
-    // 检查
-    if (latZone === 0) return;
-
-    return [latZone, lngZone];
-}
-
-function setChangedControls() {}
-
-function setChangingControls() {}
-
-/** 根据距离更新 zoom */
-function updateWheelZoom() {
-    const pos = manager.camera.position;
-    const dis = pos.length() - earthRadius;
-    const controls = getOrbitControls();
-
-    let zoom = MAX_ZOOM;
-
-    while (zoom > 0) {
-        if (dis <= ZOOM_DIS.get(zoom)) {
-            mapZoom = zoom;
-            break;
-        }
-        zoom--;
-    }
-
-    // 控制缩放的速度和旋转的速度
-    const speed = ZOOM_SPEED.get(mapZoom);
-
-    if (!isLowHeight) {
-        controls.rotateSpeed = speed;
-        controls.zoomSpeed = speed * 3.6;
-    } else if (isLowHeight) {
-        controls.rotateSpeed = 1;
-        controls.zoomSpeed = 2;
-        controls.panSpeed = 0.006;
-    }
-}
-
-/** 设置缩放 */
-export function setZoom(zoom: number) {
-    if (zoom > MAX_ZOOM) {
-        zoom = MAX_ZOOM;
-    }
-    if (zoom < MIN_ZOOM) {
-        zoom = MIN_ZOOM;
-    }
-
-    if (zoom === mapZoom) return;
-
-    mapZoom = zoom;
-
-    const length = ZOOM_DIS.get(mapZoom) + earthRadius;
-    const position = manager.camera.position;
-
-    const des = manager.getCollinearVector(position, length);
-
-    // mapZoom 不涉及球体旋转，不使用球面插值动画
-    manager.createLineTween(des).onComplete(() => {
-        // 更新一下zoom
-        updateWheelZoom();
-    });
-}
-
-/** 相机球面动画 */
-export async function cameraToSpherePos(to: Vector3) {
-    return new Promise((resolve) => {
-        if (isLowHeight) {
-            const controls = getOrbitControls();
-            const target = controls.target;
-
-            const obj = { t: 0 };
-            const start = target.clone().normalize();
-            const end = to.clone().normalize();
-
-            const quat = new Quaternion();
-            const quat1 = new Quaternion().setFromUnitVectors(start, end);
-
-            const tween = new Tween(obj)
-                .to({ t: 1 }, 300)
-                .onUpdate(() => {
-                    target.applyQuaternion(quat.clone().slerp(quat1, obj.t));
-                    // 同时不断更新camera的位置
-                })
-                .start()
-                .onComplete(() => resolve(0));
-
-            manager.getTweenGroup().add(tween);
-        } else {
-            manager.createSphereTween(to).onComplete(() => resolve(0));
-        }
-    });
-}
-
-/**
- * 是否是在点击画布，由于点击事件同时会触发 control的事件，
- * 在这里做一个区分，如果用户点击的时间很短，并且鼠标移动
- * 了很短的距离，认为用户只是在点击，而不是在拖拽地图
- */
-export function isShortClick() {
-    if (
-        clickEndTime - clickStartTime < MAX_CLICKING_TIME &&
-        (clickEndPos.x - clickStartPos.x) ** 2 + (clickEndPos.y - clickStartPos.y) ** 2 <
-            MAX_MOVE_DELTA_SQA
-    ) {
-        return true;
-    }
-
-    return false;
-}
-
-function setZones(zones: GISZoneMap, pos?: Vector3) {}
-
-function afterVisibleZonesChange() {}
-
-function beforeVisibleZonesChange() {}
-
-/** 获取该分区的相邻分区， 不包括自己 */
-function getAdjacentZones(zone: GISZone) {
-    const [lat] = zone;
-
-    const min = Math.max(1, lat - 1);
-    const max = Math.min(LAT_SLICES, lat + 1);
-
-    const zs: GISZoneMap = {};
-
-    for (let i = min; i <= max; i++) {
-        for (let j = 1; j <= LNG_SLICES; j++) {
-            const z: GISZone = [i, j];
-            const key = getZoneKey(z);
-
-            if (isAdjacentZones(zone, z) && !zs[key]) {
-                zs[key] = z;
-            }
-        }
-    }
-
-    return zs;
-}
-
-/** 判断是否是相邻分区 */
-function isAdjacentZones(zone1: GISZone, zone2: GISZone) {
-    if (!zone1 || !zone2) return false;
-
-    if (getZoneKey(zone1) === getZoneKey(zone2)) return false;
-
-    const [zLat1, zLng1] = zone1;
-    const [zLat2, zLng2] = zone2;
-
-    if (
-        Math.abs(zLat1 - zLat2) <= 1 &&
-        (Math.abs(zLng1 - zLng2) <= 1 || Math.abs(zLng1 - zLng2) === LNG_SLICES - 1)
-    ) {
-        return true;
-    }
-
-    return false;
-}
-
-/** 检查是否是可见区域 */
-function isVisibleZone(zone: GISZone, frustum: Frustum) {
-    const { lonMin, lonMax, latMax, latMin, center } = getZoneBox(zone);
-    // 左上
-    const lt = manager.latLngToVector3(latMax, lonMin, earthRadius);
-    // 左下
-    const lb = manager.latLngToVector3(latMin, lonMin, earthRadius);
-    // 右上
-    const rt = manager.latLngToVector3(latMax, lonMax, earthRadius);
-    // 右下
-    const rb = manager.latLngToVector3(latMin, lonMax, earthRadius);
-
-    // 加中心更准确
-    const c = manager.latLngToVector3(center.lat, center.lng, earthRadius);
-
-    const box = new Box3();
-    const corners = [lt, lb, rt, rb, c];
-    corners.forEach((v) => box.expandByPoint(v));
-
-    return frustum.intersectsBox(box);
-}
-
-/** 坐标是否可见 */
-export function isVisibleVector(v: Vector3, frustum: Frustum) {
-    return frustum.containsPoint(v);
-}
-
-/** 获取分区的包围盒 */
-export function getZoneBox(zone: GISZone): GeoBounds {
-    let [lat, lng] = zone;
-
-    let latMax = 0,
-        latMin = 0,
-        lonMax = 0,
-        lonMin = 0;
-
-    if (lat > LAT_SLICES / 2) {
-        lat = lat - LAT_SLICES / 2;
-        latMax = LAT_DIVIDER[lat];
-        latMin = LAT_DIVIDER[lat - 1];
-    } else {
-        lat = LAT_SLICES / 2 - lat;
-        latMax = -LAT_DIVIDER[lat];
-        latMin = -LAT_DIVIDER[lat + 1];
-    }
-
-    if (lng <= LNG_SLICES / 2) {
-        lonMax = LNG_DIVIDER * lng;
-        lonMin = LNG_DIVIDER * (lng - 1);
-    } else {
-        lng = LNG_SLICES - lng;
-        lonMin = -(lng + 1) * LNG_DIVIDER;
-        lonMax = -lng * LNG_DIVIDER;
-    }
-
-    return {
-        lonMin,
-        lonMax,
-        latMax,
-        latMin,
-        center: { lat: (latMax + latMin) / 2, lng: (lonMin + lonMax) / 2 },
-    };
-}
-
-export async function loadTestTree() {
-    const loader = manager.getGLTFLoader();
-    const gltf = await loader.loadAsync("http://localhost:12345/fuck/quiver_tree_02_1k.gltf");
-    testTree = gltf.scene;
-}
-
-export function getTestTree() {
-    return testTree;
 }

@@ -3,14 +3,14 @@ import {
     banControl,
     getEditType,
     getGlobalMap,
-    getIntersectOfMesh,
     getManager,
+    getMouseIntersect,
     getTestTree,
     getUniforms,
     resetControl,
     traverseTileBFS,
 } from "./core";
-import { CommonStatus, LayerStyle } from "./types";
+import { CommonStatus } from "./types";
 import { InstancedMesh, Matrix4, Mesh, Quaternion, Vector3 } from "./three-manager";
 
 const status: CommonStatus = {
@@ -59,8 +59,7 @@ export function vegetationPointerDown(e: PointerEvent) {
     // 只考虑左键触发
     if (e.button !== 0) return;
 
-    const manager = getManager();
-    const { tileIndex } = getIntersectOfMesh(manager.getCanvasNDC(e)) || {};
+    const { tileIndex } = getMouseIntersect();
     if (tileIndex == null) return;
 
     setStatus("isEdit", true);
@@ -69,9 +68,9 @@ export function vegetationPointerDown(e: PointerEvent) {
 
 export function vegetationPointerMove(e: PointerEvent) {
     if (!isTheType()) return;
-    const { isEdit, radius, value } = status;
+    const { isEdit, radius } = status;
     const manager = getManager();
-    const { tileIndex } = getIntersectOfMesh(manager.getCanvasNDC(e)) || {};
+    const { tileIndex } = getMouseIntersect();
     if (tileIndex == null) return;
 
     const { uTileCount, uTileHoverArray } = getUniforms();
@@ -121,7 +120,6 @@ export function vegetationPointerMove(e: PointerEvent) {
             matrix.compose(pos, quaternion, new Vector3(3, 3, 3));
 
             const id = [...leavedInstanceID][0];
-            console.log("id", id);
             treeMesh.setMatrixAt(id, matrix);
             // 用了这个id
             leavedInstanceID.delete(id);
