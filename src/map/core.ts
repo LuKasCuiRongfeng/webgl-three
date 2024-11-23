@@ -305,10 +305,14 @@ export async function initMap() {
     mapInitStatus.loadPercent = 100;
 
     setInterval(() => {
-        const index = Math.floor(Math.random() * 10000)
-        const { x, y, z } = meshBytesUtils.getTileByIndex(index)
-        const length = manager.camera.position.length()
-        cameraToSpherePos(new Vector3(x, y, -z).normalize().multiplyScalar(length))
+        const index = Math.floor(Math.random() * 10000);
+        const { x, y, z } = meshBytesUtils.getTileByIndex(index);
+        const to = new Vector3(x, y, -z);
+        if (!isLowOrbit) {
+            manager.createCameraTween(to, "sphere", 1000);
+        } else {
+            cameraToSpherePos(to);
+        }
     }, 2000);
 }
 
@@ -380,33 +384,54 @@ function createCamerea() {
     onControlsEvent();
 }
 
-/** 相机球面动画 */
-export function cameraToSpherePos(to: Vector3) {
+/** 低轨道相机球面动画 */
+export async function cameraToSpherePos(to: Vector3) {
+    if (!isLowOrbit) return;
     return new Promise((resolve) => {
-        if (isLowOrbit) {
-            const controls = getOrbitControls();
-            const target = controls.target;
+        const controls = getOrbitControls();
+        const position = manager.camera.position;
+        const old = controls.target.clone();
+        const length = old.distanceTo(position);
 
-            const obj = { t: 0 };
-            const start = target.clone().normalize();
-            const end = to.clone().normalize();
+        const obj = { t: 0 };
 
-            const quat = new Quaternion();
-            const quat1 = new Quaternion().setFromUnitVectors(start, end);
+        const tween = new Tween(obj)
+            .to({ t: 1 }, 1000)
+            .onUpdate(() => {
+                const target = old.clone().lerp(to, obj.t).normalize().multiplyScalar(old.length());
+                controls.target.copy(target)
+                // 同时不断更新camera的位置
 
-            const tween = new Tween(obj)
-                .to({ t: 1 }, 300)
-                .onUpdate(() => {
-                    target.applyQuaternion(quat.clone().slerp(quat1, obj.t));
-                    // 同时不断更新camera的位置
-                })
-                .start()
-                .onComplete(() => resolve(0));
+                const nt = target.clone();
 
-            manager.getTweenGroup().add(tween);
-        } else {
-            manager.createSphereTween(to).onComplete(() => resolve(0));
-        }
+                const yp = new Vector3(0, 1, 0);
+                const angle = nt.angleTo(yp);
+
+                const yn = new Vector3(0, 1, 0).multiplyScalar(nt.length() / Math.cos(angle));
+                // angle 如果小于 pi/2，则位于北半球，orth方向垂直向外
+                // 如果大于 pi/2，则位于南半球，orth方向垂直向内
+                const orth = nt.clone().cross(yn).normalize();
+
+                const tCamera = nt.clone().sub(yn).normalize().multiplyScalar(length);
+                const dir = nt.y >= 0 ? 1 : -1;
+                // 在旋转个角度
+                const quaternion = new Quaternion().setFromAxisAngle(
+                    orth.multiplyScalar(dir),
+                    Math.PI / 2 - controls._tiltOrthAngle
+                );
+                tCamera.applyQuaternion(quaternion);
+                if (dir === 1) {
+                    position.copy(nt.add(tCamera));
+                } else {
+                    position.copy(nt.sub(tCamera));
+                }
+
+                controls.update();
+            })
+            .start()
+            .onComplete(() => resolve(0));
+
+        manager.getTweenGroup().add(tween);
     });
 }
 
@@ -578,7 +603,7 @@ export function setZoom(zoom: number) {
     const des = manager.getCollinearVector(position, length);
 
     // mapZoom 不涉及球体旋转，不使用球面插值动画
-    manager.createLineTween(des).onComplete(() => {
+    manager.createCameraTween(des, "line").onComplete(() => {
         // 更新一下zoom
         updateWheelZoom();
     });

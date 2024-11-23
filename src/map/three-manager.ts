@@ -213,13 +213,19 @@ class ThreeManager {
         return this.clock;
     }
 
-    /** 直线相机动画 */
-    createLineTween(to: Vector3, duration = 300, autoStart = true) {
+    /** 相机动画，只能用于target在原点的相机 */
+    createCameraTween(to: Vector3, type: "line" | "sphere", duration = 300, autoStart = true) {
         this.tweenGroup.removeAll();
-        const v = this.camera.position;
+        const v = this.camera.position.clone();
         const obj = { t: 0 };
         const tween = new Tween(obj).to({ t: 1 }, duration).onUpdate(() => {
-            this.camera.position.copy(v.clone().lerp(to, obj.t));
+            const lerpV = v.clone().lerp(to, obj.t);
+            if (type === "line") {
+                this.camera.position.copy(lerpV);
+            } else {
+                this.camera.position.copy(lerpV.normalize().multiplyScalar(v.length()));
+            }
+            this.getOrbitControls(this.camera).update()
         });
 
         if (autoStart) {
@@ -237,13 +243,13 @@ class ThreeManager {
         const obj = { t: 0 };
         const start = this.camera.position.clone().normalize();
         const end = to.clone().normalize();
-        const oldQuat = this.camera.quaternion.clone()
+        const oldQuat = this.camera.quaternion.clone();
 
         const quat = new Quaternion();
         const quat1 = new Quaternion().setFromUnitVectors(start, end);
 
         const tween = new Tween(obj).to({ t: 1 }, duration).onUpdate(() => {
-            this.camera.quaternion.copy(oldQuat)
+            this.camera.quaternion.copy(oldQuat);
             this.camera.applyQuaternion(quat.clone().slerp(quat1, obj.t));
         });
 
@@ -610,9 +616,13 @@ class ThreeManager {
             this.simplifyModifier = new SimplifyModifier();
         }
 
-        const count = geometry.getAttribute("position").count;
+        const count = geometry.getAttribute("position")?.count;
+        if (!count) throw new Error("无法识别顶点");
+
         const removeCount = Math.floor(count * ratio);
 
+        // 很操蛋的是 modify第二个参数count 代表的是需要被删除的顶点数量，必须取整
+        // 实现过程是简单无脑的遍历，如果geometry顶点数量巨大，会造成严重的卡顿
         return this.simplifyModifier.modify(geometry, removeCount);
     }
 
