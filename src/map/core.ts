@@ -304,16 +304,16 @@ export async function initMap() {
 
     mapInitStatus.loadPercent = 100;
 
-    setInterval(() => {
-        const index = Math.floor(Math.random() * 10000);
-        const { x, y, z } = meshBytesUtils.getTileByIndex(index);
-        const to = new Vector3(x, y, -z);
-        if (!isLowOrbit) {
-            manager.createCameraTween(to, "sphere", 1000);
-        } else {
-            cameraToSpherePos(to);
-        }
-    }, 2000);
+    // setInterval(() => {
+    //     const index = Math.floor(Math.random() * 10000);
+    //     const { x, y, z } = meshBytesUtils.getTileByIndex(index);
+    //     const to = new Vector3(x, y, -z);
+    //     if (!isLowOrbit) {
+    //         manager.createCameraTween(to, "sphere", 1000);
+    //     } else {
+    //         cameraToSpherePos(to);
+    //     }
+    // }, 2000);
 }
 
 function render() {
@@ -644,12 +644,12 @@ function udpateLight(elapsed: number) {
     const v = new Vector3();
 
     // 灯光位置使用动画旋转的轨道位置
-    // sunOrbit.theta = elapsed * 0.5;
+    sunOrbit.theta = elapsed * 0.5;
 
-    // 灯光位置使用相机位置
-    sunOrbit.setFromVector3(manager.camera.position);
-    // 稍微往左偏离一个角度
-    sunOrbit.theta -= Math.PI / 20;
+    // // 灯光位置使用相机位置
+    // sunOrbit.setFromVector3(manager.camera.position);
+    // // 稍微往左偏离一个角度
+    // sunOrbit.theta -= Math.PI / 20;
 
     v.setFromSpherical(sunOrbit);
 
